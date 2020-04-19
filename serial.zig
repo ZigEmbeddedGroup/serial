@@ -32,7 +32,7 @@ pub const Handshake = enum {
 pub const SerialConfig = struct {
     /// Symbol rate in bits/second. Not that these
     /// include also parity and stop bits.
-    baud_rate: usize,
+    baud_rate: u32,
 
     /// Parity to verify transport integrity.
     parity: Parity = .none,
