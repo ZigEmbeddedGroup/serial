@@ -267,7 +267,7 @@ const PURGE_RXCLEAR = 0x0008;
 const PURGE_TXABORT = 0x0001;
 const PURGE_TXCLEAR = 0x0004;
 
-extern "kernel32" fn PurgeComm(hFile: std.os.windows.HANDLE, dwFlags: std.os.windows.DWORD) std.os.windows.BOOL;
+extern "kernel32" fn PurgeComm(hFile: std.os.windows.HANDLE, dwFlags: std.os.windows.DWORD) callconv(.Stdcall) std.os.windows.BOOL;
 
 const TCIFLUSH = 0;
 const TCOFLUSH = 1;
@@ -348,8 +348,8 @@ const DCB = extern struct {
     wReserved1: std.os.windows.WORD,
 };
 
-extern "kernel32" fn GetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) std.os.windows.BOOL;
-extern "kernel32" fn SetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) std.os.windows.BOOL;
+extern "kernel32" fn GetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(.Stdcall) std.os.windows.BOOL;
+extern "kernel32" fn SetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(.Stdcall) std.os.windows.BOOL;
 
 test "basic configuration test" {
     var cfg = SerialConfig{
