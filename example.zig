@@ -6,7 +6,7 @@ pub fn main() !u8 {
 
     var serial = std.fs.cwd().openFile(port_name, .{ .read = true, .write = true }) catch |err| switch (err) {
         error.FileNotFound => {
-            try std.io.getStdOut().outStream().print("The serial port {} does not exist.\n", .{port_name});
+            try std.io.getStdOut().writer().print("The serial port {} does not exist.\n", .{port_name});
             return 1;
         },
         else => return err,
@@ -21,7 +21,7 @@ pub fn main() !u8 {
         .handshake = .none,
     });
 
-    try serial.outStream().writeAll("Hello, World!\r\n");
+    try serial.writer().writeAll("Hello, World!\r\n");
 
     return 0;
 }
