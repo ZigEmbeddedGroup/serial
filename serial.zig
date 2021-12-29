@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const Parity = enum {
     /// No parity bit is used
@@ -117,7 +118,7 @@ const VEOL2 = 16;
 /// are either called `\\.\COMxx\` or `COMx`, on unixes the serial
 /// port is called `/dev/ttyXXX`.
 pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
-    switch (std.builtin.os.tag) {
+    switch (builtin.os.tag) {
         .windows => {
             var dcb = std.mem.zeroes(DCB);
             dcb.DCBlength = @sizeOf(DCB);
@@ -217,7 +218,7 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             }
 
             const baudmask = try mapBaudToLinuxEnum(config.baud_rate);
-            settings.cflag &= ~@as(std.os.tcflag_t, CBAUD);
+            settings.cflag &= ~@as(std.os.linux.tcflag_t, CBAUD);
             settings.cflag |= baudmask;
             settings.ispeed = baudmask;
             settings.ospeed = baudmask;
@@ -237,7 +238,7 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
 /// the receive buffer is flushed, if `output` is set all pending data in
 /// the send buffer is flushed.
 pub fn flushSerialPort(port: std.fs.File, input: bool, output: bool) !void {
-    switch (std.builtin.os.tag) {
+    switch (builtin.os.tag) {
         .windows => {
             const success = if (input and output)
                 PurgeComm(port.handle, PURGE_TXCLEAR | PURGE_RXCLEAR)
@@ -279,40 +280,40 @@ fn tcflush(fd: std.os.fd_t, mode: usize) !void {
         return error.FlushError;
 }
 
-fn mapBaudToLinuxEnum(baudrate: usize) !std.os.speed_t {
+fn mapBaudToLinuxEnum(baudrate: usize) !std.os.linux.speed_t {
     return switch (baudrate) {
         // from termios.h
-        50 => 0o0000001,
-        75 => 0o0000002,
-        110 => 0o0000003,
-        134 => 0o0000004,
-        150 => 0o0000005,
-        200 => 0o0000006,
-        300 => 0o0000007,
-        600 => 0o0000010,
-        1200 => 0o0000011,
-        1800 => 0o0000012,
-        2400 => 0o0000013,
-        4800 => 0o0000014,
-        9600 => 0o0000015,
-        19200 => 0o0000016,
-        38400 => 0o0000017,
+        50 => std.os.linux.B50,
+        75 => std.os.linux.B75,
+        110 => std.os.linux.B110,
+        134 => std.os.linux.B134,
+        150 => std.os.linux.B150,
+        200 => std.os.linux.B200,
+        300 => std.os.linux.B300,
+        600 => std.os.linux.B600,
+        1200 => std.os.linux.B1200,
+        1800 => std.os.linux.B1800,
+        2400 => std.os.linux.B2400,
+        4800 => std.os.linux.B4800,
+        9600 => std.os.linux.B9600,
+        19200 => std.os.linux.B19200,
+        38400 => std.os.linux.B38400,
         // from termios-baud.h
-        57600 => 0o0010001,
-        115200 => 0o0010002,
-        230400 => 0o0010003,
-        460800 => 0o0010004,
-        500000 => 0o0010005,
-        576000 => 0o0010006,
-        921600 => 0o0010007,
-        1000000 => 0o0010010,
-        1152000 => 0o0010011,
-        1500000 => 0o0010012,
-        2000000 => 0o0010013,
-        2500000 => 0o0010014,
-        3000000 => 0o0010015,
-        3500000 => 0o0010016,
-        4000000 => 0o0010017,
+        57600 => std.os.linux.B57600,
+        115200 => std.os.linux.B115200,
+        230400 => std.os.linux.B230400,
+        460800 => std.os.linux.B460800,
+        500000 => std.os.linux.B500000,
+        576000 => std.os.linux.B576000,
+        921600 => std.os.linux.B921600,
+        1000000 => std.os.linux.B1000000,
+        1152000 => std.os.linux.B1152000,
+        1500000 => std.os.linux.B1500000,
+        2000000 => std.os.linux.B2000000,
+        2500000 => std.os.linux.B2500000,
+        3000000 => std.os.linux.B3000000,
+        3500000 => std.os.linux.B3500000,
+        4000000 => std.os.linux.B4000000,
         else => error.UnsupportedBaudRate,
     };
 }

@@ -2,11 +2,11 @@ const std = @import("std");
 const zig_serial = @import("serial.zig");
 
 pub fn main() !u8 {
-    const port_name = if (std.builtin.os.tag == .windows) "\\\\.\\COM1" else "/dev/ttyUSB0";
+    const port_name = if (@import("builtin").os.tag == .windows) "\\\\.\\COM1" else "/dev/ttyUSB0";
 
     var serial = std.fs.cwd().openFile(port_name, .{ .read = true, .write = true }) catch |err| switch (err) {
         error.FileNotFound => {
-            try std.io.getStdOut().writer().print("The serial port {} does not exist.\n", .{port_name});
+            try std.io.getStdOut().writer().print("The serial port {s} does not exist.\n", .{port_name});
             return 1;
         },
         else => return err,
