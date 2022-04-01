@@ -49,69 +49,14 @@ pub const SerialConfig = struct {
     handshake: Handshake = .none,
 };
 
-// from linux headers
-const OPOST = 0o0000001;
-
-const ISIG = 0o0000001; //     Enable signals.
-const ICANON = 0o0000002; //     Canonical input (erase and kill processing).
-const XCASE = 0o0000004;
-const ECHO = 0o0000010; //    Enable echo.
-const ECHOE = 0o0000020; //    Echo erase character as error-correcting backspace.
-const ECHOK = 0o0000040; //    Echo KILL.
-const ECHONL = 0o0000100; //    Echo NL.
-const NOFLSH = 0o0000200; //    Disable flush after interrupt or quit.
-const TOSTOP = 0o0000400; //    Send SIGTTOU for background output.
-const IEXTEN = 0o0100000;
-
 const CBAUD = 0o000000010017; //Baud speed mask (not in POSIX).
-const CBAUDEX = 0o000000010000;
-
-const CSIZE = 0o0000060;
-const CS5 = 0o0000000;
-const CS6 = 0o0000020;
-const CS7 = 0o0000040;
-const CS8 = 0o0000060;
-const CSTOPB = 0o0000100;
-const CREAD = 0o0000200;
-const PARENB = 0o0000400;
-const PARODD = 0o0001000;
-const HUPCL = 0o0002000;
-const CLOCAL = 0o0004000;
 const CMSPAR = 0o010000000000;
 const CRTSCTS = 0o020000000000;
-const IGNBRK = 0o0000001;
-const BRKINT = 0o0000002;
-const IGNPAR = 0o0000004;
-const PARMRK = 0o0000010;
-const INPCK = 0o0000020;
-const ISTRIP = 0o0000040;
-const INLCR = 0o0000100;
-const IGNCR = 0o0000200;
-const ICRNL = 0o0000400;
-const IUCLC = 0o0001000;
-const IXON = 0o0002000;
-const IXANY = 0o0004000;
-const IXOFF = 0o0010000;
-const IMAXBEL = 0o0020000;
-const IUTF8 = 0o0040000;
 
-const VINTR = 0;
-const VQUIT = 1;
-const VERASE = 2;
-const VKILL = 3;
-const VEOF = 4;
 const VTIME = 5;
 const VMIN = 6;
-const VSWTC = 7;
 const VSTART = 8;
 const VSTOP = 9;
-const VSUSP = 10;
-const VEOL = 11;
-const VREPRINT = 12;
-const VDISCARD = 13;
-const VWERASE = 14;
-const VLNEXT = 15;
-const VEOL2 = 16;
 
 /// This function configures a serial port with the given config.
 /// `port` is an already opened serial port, on windows these
@@ -157,9 +102,6 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             };
             dcb.XonChar = 0x11;
             dcb.XoffChar = 0x13;
-            // dcb.ErrorChar = 0xFF;
-            // dcb.EofChar = 0x00;
-            // dcb.EvtChar = ;
             dcb.wReserved1 = 0;
 
             if (SetCommState(port.handle, &dcb) == 0)
@@ -170,50 +112,39 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
 
             settings.iflag = 0;
             settings.oflag = 0;
-            settings.cflag = CREAD;
+            settings.cflag = std.os.linux.CREAD;
             settings.lflag = 0;
             settings.ispeed = 0;
             settings.ospeed = 0;
 
-            // settings.iflag &= ~@as(std.os.tcflag_t, IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
-            // settings.oflag &= ~@as(std.os.tcflag_t, OPOST);
-            // settings.lflag &= ~@as(std.os.tcflag_t, ECHO | ECHONL | ICANON | ISIG | IEXTEN);
-            // settings.cflag &= ~@as(std.os.tcflag_t, CSIZE | PARENB);
-            // settings.cflag |= CS8;
-
-            // settings.cflag &= ~@as(std.os.tcflag_t, PARODD | CMSPAR);
             switch (config.parity) {
                 .none => {},
-                .odd => settings.cflag |= PARODD,
-                .even => {}, // even parity is default
-                .mark => settings.cflag |= PARODD | CMSPAR,
+                .odd => settings.cflag |= std.os.linux.PARODD,
+                .even => {}, // even parity is default when parity is enabled
+                .mark => settings.cflag |= std.os.linux.PARODD | CMSPAR,
                 .space => settings.cflag |= CMSPAR,
             }
             if (config.parity != .none) {
-                settings.iflag |= INPCK; // enable parity checking
-                settings.cflag |= PARENB; // enable parity generation
+                settings.iflag |= std.os.linux.INPCK; // enable parity checking
+                settings.cflag |= std.os.linux.PARENB; // enable parity generation
             }
-            // else {
-            //     settings.iflag &= ~@as(std.os.tcflag_t, INPCK); // disable parity checking
-            //     settings.cflag &= ~@as(std.os.tcflag_t, PARENB); // disable parity generation
-            // }
 
             switch (config.handshake) {
-                .none => settings.cflag |= CLOCAL,
-                .software => settings.iflag |= IXON | IXOFF,
+                .none => settings.cflag |= std.os.linux.CLOCAL,
+                .software => settings.iflag |= std.os.linux.IXON | std.os.linux.IXOFF,
                 .hardware => settings.cflag |= CRTSCTS,
             }
 
             switch (config.stop_bits) {
                 .one => {},
-                .two => settings.cflag |= CSTOPB,
+                .two => settings.cflag |= std.os.linux.CSTOPB,
             }
 
             switch (config.word_size) {
-                5 => settings.cflag |= CS5,
-                6 => settings.cflag |= CS6,
-                7 => settings.cflag |= CS7,
-                8 => settings.cflag |= CS8,
+                5 => settings.cflag |= std.os.linux.CS5,
+                6 => settings.cflag |= std.os.linux.CS6,
+                7 => settings.cflag |= std.os.linux.CS7,
+                8 => settings.cflag |= std.os.linux.CS8,
                 else => return error.UnsupportedWordSize,
             }
 
