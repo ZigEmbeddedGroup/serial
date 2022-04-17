@@ -290,6 +290,21 @@ pub const ControlPins = struct {
 
 pub fn changeControlPins(port: std.fs.File, pins: ControlPins) !void {
     switch (builtin.os.tag) {
+        .windows => {
+            const CLRDTR = 6;
+            const CLRRTS = 4;
+            const SETDTR = 5;
+            const SETRTS = 3;
+
+            if (pins.dtr) |dtr| {
+                if (EscapeCommFunction(port.handle, if (dtr) SETDTR else CLRDTR) == 0)
+                    return error.WindowsError;
+            }
+            if (pins.rts) |rts| {
+                if (EscapeCommFunction(port.handle, if (rts) SETRTS else CLRRTS) == 0)
+                    return error.WindowsError;
+            }
+        },
         .linux => {
             var rts_tag: usize = 0x004; // std.os.linux.TIOCM_RTS;
             var dtr_tag: usize = 0x002; // std.os.linux.TIOCM_DTR;
@@ -315,6 +330,7 @@ const PURGE_TXABORT = 0x0001;
 const PURGE_TXCLEAR = 0x0004;
 
 extern "kernel32" fn PurgeComm(hFile: std.os.windows.HANDLE, dwFlags: std.os.windows.DWORD) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+extern "kernel32" fn EscapeCommFunction(hFile: std.os.windows.HANDLE, dwFunc: std.os.windows.DWORD) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
 
 const TCIFLUSH = 0;
 const TCOFLUSH = 1;
@@ -477,4 +493,8 @@ test "basic flush test" {
     try flushSerialPort(port, true, false);
     try flushSerialPort(port, false, true);
     try flushSerialPort(port, false, false);
+}
+
+test "change control pins" {
+    _ = changeControlPins;
 }
