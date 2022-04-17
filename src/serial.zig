@@ -152,22 +152,27 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             if (GetCommState(port.handle, &dcb) == 0)
                 return error.WindowsError;
 
-            std.debug.warn("dcb = {}\n", .{dcb});
+            var flags = DCBFlags.fromNumeric(dcb.flags);
+
+            // std.log.err("{s} {s}", .{ dcb, flags });
 
             dcb.BaudRate = config.baud_rate;
-            dcb.fBinary = 1;
-            dcb.fParity = if (config.parity != .none) @as(u1, 1) else @as(u1, 0);
-            dcb.fOutxCtsFlow = if (config.handshake == .hardware) @as(u1, 1) else @as(u1, 0);
-            dcb.fOutxDsrFlow = 0;
-            dcb.fDtrControl = 0;
-            dcb.fDsrSensitivity = 0;
-            dcb.fTXContinueOnXoff = 0;
-            dcb.fOutX = if (config.handshake == .software) @as(u1, 1) else @as(u1, 0);
-            dcb.fInX = if (config.handshake == .software) @as(u1, 1) else @as(u1, 0);
-            dcb.fErrorChar = 0;
-            dcb.fNull = 0;
-            dcb.fRtsControl = if (config.handshake == .hardware) @as(u1, 1) else @as(u1, 0);
-            dcb.fAbortOnError = 0;
+
+            flags.fBinary = 1;
+            flags.fParity = if (config.parity != .none) @as(u1, 1) else @as(u1, 0);
+            flags.fOutxCtsFlow = if (config.handshake == .hardware) @as(u1, 1) else @as(u1, 0);
+            flags.fOutxDsrFlow = 0;
+            flags.fDtrControl = 0;
+            flags.fDsrSensitivity = 0;
+            flags.fTXContinueOnXoff = 0;
+            flags.fOutX = if (config.handshake == .software) @as(u1, 1) else @as(u1, 0);
+            flags.fInX = if (config.handshake == .software) @as(u1, 1) else @as(u1, 0);
+            flags.fErrorChar = 0;
+            flags.fNull = 0;
+            flags.fRtsControl = if (config.handshake == .hardware) @as(u1, 1) else @as(u1, 0);
+            flags.fAbortOnError = 0;
+            dcb.flags = flags.toNumeric();
+
             dcb.wReserved = 0;
             dcb.ByteSize = config.word_size;
             dcb.Parity = switch (config.parity) {
@@ -250,6 +255,9 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
 /// the receive buffer is flushed, if `output` is set all pending data in
 /// the send buffer is flushed.
 pub fn flushSerialPort(port: std.fs.File, input: bool, output: bool) !void {
+    if (!input and !output)
+        return;
+
     switch (builtin.os.tag) {
         .windows => {
             const success = if (input and output)
@@ -324,7 +332,7 @@ const PURGE_RXCLEAR = 0x0008;
 const PURGE_TXABORT = 0x0001;
 const PURGE_TXCLEAR = 0x0004;
 
-extern "kernel32" fn PurgeComm(hFile: std.os.windows.HANDLE, dwFlags: std.os.windows.DWORD) callconv(.Stdcall) std.os.windows.BOOL;
+extern "kernel32" fn PurgeComm(hFile: std.os.windows.HANDLE, dwFlags: std.os.windows.DWORD) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
 
 const TCIFLUSH = 0;
 const TCOFLUSH = 1;
@@ -374,23 +382,73 @@ fn mapBaudToLinuxEnum(baudrate: usize) !std.os.linux.speed_t {
     };
 }
 
+const DCBFlags = struct {
+    fBinary: u1, // u1
+    fParity: u1, // u1
+    fOutxCtsFlow: u1, // u1
+    fOutxDsrFlow: u1, // u1
+    fDtrControl: u2, // u2
+    fDsrSensitivity: u1, // u1
+    fTXContinueOnXoff: u1, // u1
+    fOutX: u1, // u1
+    fInX: u1, // u1
+    fErrorChar: u1, // u1
+    fNull: u1, // u1
+    fRtsControl: u2, // u2
+    fAbortOnError: u1, // u1
+    fDummy2: u17 = 0, // u17
+
+    // TODO: Packed structs please
+    pub fn fromNumeric(value: u32) DCBFlags {
+        var flags: DCBFlags = undefined;
+        flags.fBinary = @truncate(u1, value >> 0); // u1
+        flags.fParity = @truncate(u1, value >> 1); // u1
+        flags.fOutxCtsFlow = @truncate(u1, value >> 2); // u1
+        flags.fOutxDsrFlow = @truncate(u1, value >> 3); // u1
+        flags.fDtrControl = @truncate(u2, value >> 4); // u2
+        flags.fDsrSensitivity = @truncate(u1, value >> 6); // u1
+        flags.fTXContinueOnXoff = @truncate(u1, value >> 7); // u1
+        flags.fOutX = @truncate(u1, value >> 8); // u1
+        flags.fInX = @truncate(u1, value >> 9); // u1
+        flags.fErrorChar = @truncate(u1, value >> 10); // u1
+        flags.fNull = @truncate(u1, value >> 11); // u1
+        flags.fRtsControl = @truncate(u2, value >> 12); // u2
+        flags.fAbortOnError = @truncate(u1, value >> 14); // u1
+        flags.fDummy2 = @truncate(u17, value >> 15); // u17
+        return flags;
+    }
+
+    pub fn toNumeric(self: DCBFlags) u32 {
+        var value: u32 = 0;
+        value += @as(u32, self.fBinary) << 0; // u1
+        value += @as(u32, self.fParity) << 1; // u1
+        value += @as(u32, self.fOutxCtsFlow) << 2; // u1
+        value += @as(u32, self.fOutxDsrFlow) << 3; // u1
+        value += @as(u32, self.fDtrControl) << 4; // u2
+        value += @as(u32, self.fDsrSensitivity) << 6; // u1
+        value += @as(u32, self.fTXContinueOnXoff) << 7; // u1
+        value += @as(u32, self.fOutX) << 8; // u1
+        value += @as(u32, self.fInX) << 9; // u1
+        value += @as(u32, self.fErrorChar) << 10; // u1
+        value += @as(u32, self.fNull) << 11; // u1
+        value += @as(u32, self.fRtsControl) << 12; // u2
+        value += @as(u32, self.fAbortOnError) << 14; // u1
+        value += @as(u32, self.fDummy2) << 15; // u17
+        return value;
+    }
+};
+
+test "DCBFlags" {
+    var rand: u32 = 0;
+    try std.os.getrandom(@ptrCast(*[4]u8, &rand));
+    var flags = DCBFlags.fromNumeric(rand);
+    try std.testing.expectEqual(rand, flags.toNumeric());
+}
+
 const DCB = extern struct {
     DCBlength: std.os.windows.DWORD,
     BaudRate: std.os.windows.DWORD,
-    fBinary: std.os.windows.DWORD, // u1
-    fParity: std.os.windows.DWORD, // u1
-    fOutxCtsFlow: std.os.windows.DWORD, // u1
-    fOutxDsrFlow: std.os.windows.DWORD, // u1
-    fDtrControl: std.os.windows.DWORD, // u2
-    fDsrSensitivity: std.os.windows.DWORD,
-    fTXContinueOnXoff: std.os.windows.DWORD,
-    fOutX: std.os.windows.DWORD, // u1
-    fInX: std.os.windows.DWORD, // u1
-    fErrorChar: std.os.windows.DWORD, // u1
-    fNull: std.os.windows.DWORD, // u1
-    fRtsControl: std.os.windows.DWORD, // u2
-    fAbortOnError: std.os.windows.DWORD, // u1
-    fDummy2: std.os.windows.DWORD, // u17
+    flags: u32,
     wReserved: std.os.windows.WORD,
     XonLim: std.os.windows.WORD,
     XoffLim: std.os.windows.WORD,
@@ -405,8 +463,8 @@ const DCB = extern struct {
     wReserved1: std.os.windows.WORD,
 };
 
-extern "kernel32" fn GetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(.Stdcall) std.os.windows.BOOL;
-extern "kernel32" fn SetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(.Stdcall) std.os.windows.BOOL;
+extern "kernel32" fn GetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+extern "kernel32" fn SetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
 
 test "basic configuration test" {
     var cfg = SerialConfig{
@@ -418,8 +476,8 @@ test "basic configuration test" {
     };
 
     var port = try std.fs.cwd().openFile(
-        if (std.builtin.os.tag == .windows) "\\\\.\\COM5" else "/dev/ttyUSB0", // if any, these will likely exist on a machine
-        .{ .read = true, .write = true },
+        if (builtin.os.tag == .windows) "\\\\.\\COM3" else "/dev/ttyUSB0", // if any, these will likely exist on a machine
+        .{ .mode = .read_write },
     );
     defer port.close();
 
@@ -428,8 +486,8 @@ test "basic configuration test" {
 
 test "basic flush test" {
     var port = try std.fs.cwd().openFile(
-        if (std.builtin.os.tag == .windows) "\\\\.\\COM5" else "/dev/ttyUSB0", // if any, these will likely exist on a machine
-        .{ .read = true, .write = true },
+        if (builtin.os.tag == .windows) "\\\\.\\COM3" else "/dev/ttyUSB0", // if any, these will likely exist on a machine
+        .{ .mode = .read_write },
     );
     defer port.close();
 
