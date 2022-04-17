@@ -275,6 +275,32 @@ pub fn flushSerialPort(port: std.fs.File, input: bool, output: bool) !void {
     }
 }
 
+pub const ControlPins = struct {
+    rts: ?bool = null,
+    dtr: ?bool = null,
+};
+
+pub fn changeControlPins(port: std.fs.File, pins: ControlPins) !void {
+    switch (builtin.os.tag) {
+        .linux => {
+            var rts_tag: usize = 0x004; // std.os.linux.TIOCM_RTS;
+            var dtr_tag: usize = 0x002; // std.os.linux.TIOCM_DTR;
+
+            const TIOCMBIS = 0x5416;
+            const TIOCMBIC = 0x5417;
+
+            if (pins.dtr) |dtr| {
+                _ = std.os.linux.ioctl(port.handle, if (dtr) TIOCMBIS else TIOCMBIC, @ptrToInt(&dtr_tag));
+            }
+            if (pins.rts) |rts| {
+                _ = std.os.linux.ioctl(port.handle, if (rts) TIOCMBIS else TIOCMBIC, @ptrToInt(&rts_tag));
+            }
+        },
+
+        else => @compileError("changeControlPins not implemented for " ++ @tagName(builtin.os.tag)),
+    }
+}
+
 const PURGE_RXABORT = 0x0002;
 const PURGE_RXCLEAR = 0x0008;
 const PURGE_TXABORT = 0x0001;
