@@ -283,18 +283,36 @@ pub const ControlPins = struct {
 pub fn changeControlPins(port: std.fs.File, pins: ControlPins) !void {
     switch (builtin.os.tag) {
         .linux => {
-            var rts_tag: usize = 0x004; // std.os.linux.TIOCM_RTS;
-            var dtr_tag: usize = 0x002; // std.os.linux.TIOCM_DTR;
+            const TIOCM_RTS: c_int = 0x004;
+            const TIOCM_DTR: c_int = 0x002;
 
-            const TIOCMBIS = 0x5416;
-            const TIOCMBIC = 0x5417;
+            // from /usr/include/asm-generic/ioctls.h
+            // const TIOCMBIS: u32 = 0x5416;
+            // const TIOCMBIC: u32 = 0x5417;
+            const TIOCMGET: u32 = 0x5415;
+            const TIOCMSET: u32 = 0x5418;
+
+            var flags: c_int = 0;
+            if (std.os.linux.ioctl(port.handle, TIOCMGET, @ptrToInt(&flags)) != 0)
+                return error.Unexpected;
 
             if (pins.dtr) |dtr| {
-                _ = std.os.linux.ioctl(port.handle, if (dtr) TIOCMBIS else TIOCMBIC, @ptrToInt(&dtr_tag));
+                if (dtr) {
+                    flags |= TIOCM_DTR;
+                } else {
+                    flags &= ~TIOCM_DTR;
+                }
             }
             if (pins.rts) |rts| {
-                _ = std.os.linux.ioctl(port.handle, if (rts) TIOCMBIS else TIOCMBIC, @ptrToInt(&rts_tag));
+                if (rts) {
+                    flags |= TIOCM_RTS;
+                } else {
+                    flags &= ~TIOCM_RTS;
+                }
             }
+
+            if (std.os.linux.ioctl(port.handle, TIOCMSET, @ptrToInt(&flags)) != 0)
+                return error.Unexpected;
         },
 
         else => @compileError("changeControlPins not implemented for " ++ @tagName(builtin.os.tag)),
