@@ -3,7 +3,7 @@ const std = @import("std");
 const pkgs = struct {
     const serial = std.build.Pkg{
         .name = "serial",
-        .path = .{ .path = "src/serial.zig" },
+        .source = .{ .path = "src/serial.zig" },
     };
 };
 
