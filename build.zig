@@ -1,25 +1,31 @@
 const std = @import("std");
 
-const pkgs = struct {
-    const serial = std.build.Pkg{
-        .name = "serial",
-        .source = .{ .path = "src/serial.zig" },
-    };
-};
-
-pub fn build(b: *std.build.Builder) void {
-    const mode = b.standardReleaseOptions();
+pub fn build(b: *std.Build) void {
+    const mode = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
 
-    const echo_exe = b.addExecutable("serial-echo", "examples/echo.zig");
-    echo_exe.setTarget(target);
-    echo_exe.setBuildMode(mode);
-    echo_exe.addPackage(pkgs.serial);
+    b.addModule(.{
+        .name = "serial",
+        .source_file = .{ .path = "src/serial.zig" },
+    });
+
+    const serial_module = b.modules.get("serial") orelse unreachable;
+
+    const echo_exe = b.addExecutable(.{
+        .name = "serial-echo",
+        .root_source_file = .{ .path = "examples/echo.zig" },
+        .target = target,
+        .optimize = mode,
+    });
+    echo_exe.addModule("serial", serial_module);
     echo_exe.install();
 
-    const list_exe = b.addExecutable("serial-list", "examples/list.zig");
-    list_exe.setTarget(target);
-    list_exe.setBuildMode(mode);
-    list_exe.addPackage(pkgs.serial);
+    const list_exe = b.addExecutable(.{
+        .name = "serial-list",
+        .root_source_file = .{ .path = "examples/list.zig" },
+        .target = target,
+        .optimize = mode,
+    });
+    list_exe.addModule("serial", serial_module);
     list_exe.install();
 }
