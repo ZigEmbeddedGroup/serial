@@ -45,7 +45,7 @@ const WindowsPortIterator = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        RegCloseKey(self.key);
+        _ = RegCloseKey(self.key);
         self.* = undefined;
     }
 
