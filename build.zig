@@ -4,12 +4,9 @@ pub fn build(b: *std.Build) void {
     const mode = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
 
-    b.addModule(.{
-        .name = "serial",
+    const serial_module = b.createModule(.{
         .source_file = .{ .path = "src/serial.zig" },
     });
-
-    const serial_module = b.modules.get("serial") orelse unreachable;
 
     const echo_exe = b.addExecutable(.{
         .name = "serial-echo",
@@ -18,7 +15,7 @@ pub fn build(b: *std.Build) void {
         .optimize = mode,
     });
     echo_exe.addModule("serial", serial_module);
-    echo_exe.install();
+    b.installArtifact(echo_exe);
 
     const list_exe = b.addExecutable(.{
         .name = "serial-list",
@@ -27,5 +24,5 @@ pub fn build(b: *std.Build) void {
         .optimize = mode,
     });
     list_exe.addModule("serial", serial_module);
-    list_exe.install();
+    b.installArtifact(list_exe);
 }
