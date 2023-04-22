@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const c = @cImport(@cInclude("termios.h"));
 
 pub fn list() !PortIterator {
     return try PortIterator.init();
@@ -8,6 +9,7 @@ pub fn list() !PortIterator {
 pub const PortIterator = switch (builtin.os.tag) {
     .windows => WindowsPortIterator,
     .linux => LinuxPortIterator,
+    .macos => DarwinPortIterator,
     else => @compileError("OS is not supported for port iteration"),
 };
 
@@ -144,6 +146,61 @@ const LinuxPortIterator = struct {
                     .display_name = path,
                     .driver = std.fs.path.basename(link),
                 };
+            } else {
+                return null;
+            }
+        }
+        return null;
+    }
+};
+
+const DarwinPortIterator = struct {
+    const Self = @This();
+
+    const root_dir = "/dev/";
+
+    // ls -hal /sys/class/tty/*/device/driver
+
+    dir: std.fs.IterableDir,
+    iterator: std.fs.IterableDir.Iterator,
+
+    full_path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined,
+    driver_path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined,
+
+    pub fn init() !Self {
+        var dir = try std.fs.cwd().openIterableDir(root_dir, .{});
+        errdefer dir.close();
+
+        return Self{
+            .dir = dir,
+            .iterator = dir.iterate(),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.dir.close();
+        self.* = undefined;
+    }
+
+    pub fn next(self: *Self) !?SerialPortDescription {
+        while (true) {
+            if (try self.iterator.next()) |entry| {
+                if (!std.mem.startsWith(u8, entry.name, "cu.")) {
+                    continue;
+                } else {
+                    var fba = std.heap.FixedBufferAllocator.init(&self.full_path_buffer);
+
+                    const path = try std.fs.path.join(fba.allocator(), &.{
+                        "/dev/",
+                        entry.name,
+                    });
+
+                    return SerialPortDescription{
+                        .file_name = path,
+                        .display_name = path,
+                        .driver = "darwin",
+                    };
+                }
             } else {
                 return null;
             }
@@ -317,6 +374,60 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
 
             try std.os.tcsetattr(port.handle, .NOW, settings);
         },
+        .macos => {
+            var settings = try std.os.tcgetattr(port.handle);
+
+            settings.iflag = 0;
+            settings.oflag = 0;
+            settings.cflag = std.os.darwin.CREAD;
+            settings.lflag = 0;
+            settings.ispeed = 0;
+            settings.ospeed = 0;
+
+            switch (config.parity) {
+                .none => {},
+                .odd => settings.cflag |= std.os.darwin.PARODD,
+                .even => {}, // even parity is default when parity is enabled
+                .mark => settings.cflag |= std.os.darwin.PARODD | CMSPAR,
+                .space => settings.cflag |= CMSPAR,
+            }
+            if (config.parity != .none) {
+                settings.iflag |= std.os.darwin.INPCK; // enable parity checking
+                settings.cflag |= std.os.darwin.PARENB; // enable parity generation
+            }
+
+            switch (config.handshake) {
+                .none => settings.cflag |= std.os.darwin.CLOCAL,
+                .software => settings.iflag |= std.os.darwin.IXON | std.os.darwin.IXOFF,
+                .hardware => settings.cflag |= CRTSCTS,
+            }
+
+            switch (config.stop_bits) {
+                .one => {},
+                .two => settings.cflag |= std.os.darwin.CSTOPB,
+            }
+
+            switch (config.word_size) {
+                5 => settings.cflag |= std.os.darwin.CS5,
+                6 => settings.cflag |= std.os.darwin.CS6,
+                7 => settings.cflag |= std.os.darwin.CS7,
+                8 => settings.cflag |= std.os.darwin.CS8,
+                else => return error.UnsupportedWordSize,
+            }
+
+            const baudmask = try mapBaudToMacOSEnum(config.baud_rate);
+            settings.cflag &= ~@as(std.os.darwin.tcflag_t, CBAUD);
+            settings.cflag |= baudmask;
+            settings.ispeed = baudmask;
+            settings.ospeed = baudmask;
+
+            settings.cc[VMIN] = 1;
+            settings.cc[VSTOP] = 0x13; // XOFF
+            settings.cc[VSTART] = 0x11; // XON
+            settings.cc[VTIME] = 0;
+
+            try std.os.tcsetattr(port.handle, .NOW, settings);
+        },
         else => @compileError("unsupported OS, please implement!"),
     }
 }
@@ -348,6 +459,13 @@ pub fn flushSerialPort(port: std.fs.File, input: bool, output: bool) !void {
             try tcflush(port.handle, TCIFLUSH)
         else if (output)
             try tcflush(port.handle, TCOFLUSH),
+
+        .macos => if (input and output)
+            try tcflush(port.handle, c.TCIOFLUSH)
+        else if (input)
+            try tcflush(port.handle, c.TCIFLUSH)
+        else if (output)
+            try tcflush(port.handle, c.TCOFLUSH),
 
         else => @compileError("unsupported OS, please implement!"),
     }
@@ -408,6 +526,8 @@ pub fn changeControlPins(port: std.fs.File, pins: ControlPins) !void {
                 return error.Unexpected;
         },
 
+        .macos => {},
+
         else => @compileError("changeControlPins not implemented for " ++ @tagName(builtin.os.tag)),
     }
 }
@@ -426,8 +546,20 @@ const TCIOFLUSH = 2;
 const TCFLSH = 0x540B;
 
 fn tcflush(fd: std.os.fd_t, mode: usize) !void {
-    if (std.os.linux.syscall3(.ioctl, @bitCast(usize, @as(isize, fd)), TCFLSH, mode) != 0)
-        return error.FlushError;
+    switch (builtin.os.tag) {
+        .linux => {
+            if (std.os.linux.syscall3(.ioctl, @bitCast(usize, @as(isize, fd)), TCFLSH, mode) != 0)
+                return error.FlushError;
+        },
+        .macos => {
+            const err = c.tcflush(fd, @intCast(c_int, mode));
+            if (err != 0) {
+                std.debug.print("tcflush failed: {d}\r\n", .{err});
+                return error.FlushError;
+            }
+        },
+        else => @compileError("unsupported OS, please implement!"),
+    }
 }
 
 fn mapBaudToLinuxEnum(baudrate: usize) !std.os.linux.speed_t {
@@ -464,6 +596,35 @@ fn mapBaudToLinuxEnum(baudrate: usize) !std.os.linux.speed_t {
         3000000 => std.os.linux.B3000000,
         3500000 => std.os.linux.B3500000,
         4000000 => std.os.linux.B4000000,
+        else => error.UnsupportedBaudRate,
+    };
+}
+
+fn mapBaudToMacOSEnum(baudrate: usize) !std.os.darwin.speed_t {
+    return switch (baudrate) {
+        // from termios.h
+        50 => std.os.darwin.B50,
+        75 => std.os.darwin.B75,
+        110 => std.os.darwin.B110,
+        134 => std.os.darwin.B134,
+        150 => std.os.darwin.B150,
+        200 => std.os.darwin.B200,
+        300 => std.os.darwin.B300,
+        600 => std.os.darwin.B600,
+        1200 => std.os.darwin.B1200,
+        1800 => std.os.darwin.B1800,
+        2400 => std.os.darwin.B2400,
+        4800 => std.os.darwin.B4800,
+        9600 => std.os.darwin.B9600,
+        19200 => std.os.darwin.B19200,
+        38400 => std.os.darwin.B38400,
+        7200 => std.os.darwin.B7200,
+        14400 => std.os.darwin.B14400,
+        28800 => std.os.darwin.B28800,
+        57600 => std.os.darwin.B57600,
+        76800 => std.os.darwin.B76800,
+        115200 => std.os.darwin.B115200,
+        230400 => std.os.darwin.B230400,
         else => error.UnsupportedBaudRate,
     };
 }
@@ -563,26 +724,37 @@ test "iterate ports" {
 test "basic configuration test" {
     var cfg = SerialConfig{
         .handshake = .none,
-        .baud_rate = 9600,
+        .baud_rate = 115200,
         .parity = .none,
         .word_size = 8,
         .stop_bits = .one,
     };
 
-    var port = try std.fs.cwd().openFile(
-        if (builtin.os.tag == .windows) "\\\\.\\COM3" else "/dev/ttyUSB0", // if any, these will likely exist on a machine
-        .{ .mode = .read_write },
-    );
+    var tty: []const u8 = undefined;
+
+    switch (builtin.os.tag) {
+        .windows => tty = "\\\\.\\COM3",
+        .linux => tty = "/dev/ttyUSB0",
+        .macos => tty = "/dev/cu.usbmodem101",
+        else => unreachable,
+    }
+
+    var port = try std.fs.cwd().openFile(tty, .{ .mode = .read_write });
     defer port.close();
 
     try configureSerialPort(port, cfg);
 }
 
 test "basic flush test" {
-    var port = try std.fs.cwd().openFile(
-        if (builtin.os.tag == .windows) "\\\\.\\COM3" else "/dev/ttyUSB0", // if any, these will likely exist on a machine
-        .{ .mode = .read_write },
-    );
+    var tty: []const u8 = undefined;
+    // if any, these will likely exist on a machine
+    switch (builtin.os.tag) {
+        .windows => tty = "\\\\.\\COM3",
+        .linux => tty = "/dev/ttyUSB0",
+        .macos => tty = "/dev/cu.usbmodem101",
+        else => unreachable,
+    }
+    var port = try std.fs.cwd().openFile(tty, .{ .mode = .read_write });
     defer port.close();
 
     try flushSerialPort(port, true, true);
