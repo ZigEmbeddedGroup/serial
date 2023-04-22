@@ -159,8 +159,6 @@ const DarwinPortIterator = struct {
 
     const root_dir = "/dev/";
 
-    // ls -hal /sys/class/tty/*/device/driver
-
     dir: std.fs.IterableDir,
     iterator: std.fs.IterableDir.Iterator,
 
@@ -320,103 +318,60 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             if (SetCommState(port.handle, &dcb) == 0)
                 return error.WindowsError;
         },
-        .linux => {
+        .linux, .macos => |tag| {
             var settings = try std.os.tcgetattr(port.handle);
+
+            const os = switch (tag) {
+                .macos => std.os.darwin,
+                .linux => std.os.linux,
+                else => unreachable,
+            };
 
             settings.iflag = 0;
             settings.oflag = 0;
-            settings.cflag = std.os.linux.CREAD;
+            settings.cflag = os.CREAD;
             settings.lflag = 0;
             settings.ispeed = 0;
             settings.ospeed = 0;
 
             switch (config.parity) {
                 .none => {},
-                .odd => settings.cflag |= std.os.linux.PARODD,
+                .odd => settings.cflag |= os.PARODD,
                 .even => {}, // even parity is default when parity is enabled
-                .mark => settings.cflag |= std.os.linux.PARODD | CMSPAR,
+                .mark => settings.cflag |= os.PARODD | CMSPAR,
                 .space => settings.cflag |= CMSPAR,
             }
             if (config.parity != .none) {
-                settings.iflag |= std.os.linux.INPCK; // enable parity checking
-                settings.cflag |= std.os.linux.PARENB; // enable parity generation
+                settings.iflag |= os.INPCK; // enable parity checking
+                settings.cflag |= os.PARENB; // enable parity generation
             }
 
             switch (config.handshake) {
-                .none => settings.cflag |= std.os.linux.CLOCAL,
-                .software => settings.iflag |= std.os.linux.IXON | std.os.linux.IXOFF,
+                .none => settings.cflag |= os.CLOCAL,
+                .software => settings.iflag |= os.IXON | os.IXOFF,
                 .hardware => settings.cflag |= CRTSCTS,
             }
 
             switch (config.stop_bits) {
                 .one => {},
-                .two => settings.cflag |= std.os.linux.CSTOPB,
+                .two => settings.cflag |= os.CSTOPB,
             }
 
             switch (config.word_size) {
-                5 => settings.cflag |= std.os.linux.CS5,
-                6 => settings.cflag |= std.os.linux.CS6,
-                7 => settings.cflag |= std.os.linux.CS7,
-                8 => settings.cflag |= std.os.linux.CS8,
+                5 => settings.cflag |= os.CS5,
+                6 => settings.cflag |= os.CS6,
+                7 => settings.cflag |= os.CS7,
+                8 => settings.cflag |= os.CS8,
                 else => return error.UnsupportedWordSize,
             }
 
-            const baudmask = try mapBaudToLinuxEnum(config.baud_rate);
-            settings.cflag &= ~@as(std.os.linux.tcflag_t, CBAUD);
-            settings.cflag |= baudmask;
-            settings.ispeed = baudmask;
-            settings.ospeed = baudmask;
+            const baudmask = switch (tag) {
+                .macos => try mapBaudToMacOSEnum(config.baud_rate),
+                .linux => try mapBaudToLinuxEnum(config.baud_rate),
+                else => unreachable,
+            };
 
-            settings.cc[VMIN] = 1;
-            settings.cc[VSTOP] = 0x13; // XOFF
-            settings.cc[VSTART] = 0x11; // XON
-            settings.cc[VTIME] = 0;
-
-            try std.os.tcsetattr(port.handle, .NOW, settings);
-        },
-        .macos => {
-            var settings = try std.os.tcgetattr(port.handle);
-
-            settings.iflag = 0;
-            settings.oflag = 0;
-            settings.cflag = std.os.darwin.CREAD;
-            settings.lflag = 0;
-            settings.ispeed = 0;
-            settings.ospeed = 0;
-
-            switch (config.parity) {
-                .none => {},
-                .odd => settings.cflag |= std.os.darwin.PARODD,
-                .even => {}, // even parity is default when parity is enabled
-                .mark => settings.cflag |= std.os.darwin.PARODD | CMSPAR,
-                .space => settings.cflag |= CMSPAR,
-            }
-            if (config.parity != .none) {
-                settings.iflag |= std.os.darwin.INPCK; // enable parity checking
-                settings.cflag |= std.os.darwin.PARENB; // enable parity generation
-            }
-
-            switch (config.handshake) {
-                .none => settings.cflag |= std.os.darwin.CLOCAL,
-                .software => settings.iflag |= std.os.darwin.IXON | std.os.darwin.IXOFF,
-                .hardware => settings.cflag |= CRTSCTS,
-            }
-
-            switch (config.stop_bits) {
-                .one => {},
-                .two => settings.cflag |= std.os.darwin.CSTOPB,
-            }
-
-            switch (config.word_size) {
-                5 => settings.cflag |= std.os.darwin.CS5,
-                6 => settings.cflag |= std.os.darwin.CS6,
-                7 => settings.cflag |= std.os.darwin.CS7,
-                8 => settings.cflag |= std.os.darwin.CS8,
-                else => return error.UnsupportedWordSize,
-            }
-
-            const baudmask = try mapBaudToMacOSEnum(config.baud_rate);
-            settings.cflag &= ~@as(std.os.darwin.tcflag_t, CBAUD);
+            settings.cflag &= ~@as(os.tcflag_t, CBAUD);
             settings.cflag |= baudmask;
             settings.ispeed = baudmask;
             settings.ospeed = baudmask;
