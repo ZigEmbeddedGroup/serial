@@ -1,12 +1,15 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const c = @cImport(@cInclude("termios.h"));
 
 pub fn list() !PortIterator {
     return try PortIterator.init();
 }
 
 pub const PortIterator = switch (builtin.os.tag) {
+    .windows => WindowsPortIterator,
     .linux => LinuxPortIterator,
+    .macos => DarwinPortIterator,
     else => @compileError("OS is not supported for port iteration"),
 };
 
@@ -15,6 +18,75 @@ pub const SerialPortDescription = struct {
     display_name: []const u8,
     driver: ?[]const u8,
 };
+
+const HKEY = std.os.windows.HANDLE;
+
+const WindowsPortIterator = struct {
+    const Self = @This();
+
+    key: HKEY,
+    index: u32,
+
+    name: [256:0]u8 = undefined,
+    name_size: u32 = 256,
+
+    data: [256]u8 = undefined,
+    filepath_data: [256]u8 = undefined,
+    data_size: u32 = 256,
+
+    pub fn init() !Self {
+        const HKEY_LOCAL_MACHINE = @intToPtr(HKEY, 0x80000002);
+        const KEY_READ = 0x20019;
+
+        var self: Self = undefined;
+        self.index = 0;
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "HARDWARE\\DEVICEMAP\\SERIALCOMM\\", 0, KEY_READ, &self.key) != 0)
+            return error.WindowsError;
+
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        _ = RegCloseKey(self.key);
+        self.* = undefined;
+    }
+
+    pub fn next(self: *Self) !?SerialPortDescription {
+        defer self.index += 1;
+
+        self.name_size = 256;
+        self.data_size = 256;
+
+        return switch (RegEnumValueA(self.key, self.index, &self.name, &self.name_size, null, null, &self.data, &self.data_size)) {
+            0 => SerialPortDescription{
+                .file_name = try std.fmt.bufPrint(&self.filepath_data, "\\\\.\\{s}", .{self.data[0 .. self.data_size - 1]}),
+                .display_name = self.data[0 .. self.data_size - 1],
+                .driver = self.name[0..self.name_size],
+            },
+            259 => null,
+            else => error.WindowsError,
+        };
+    }
+};
+
+extern "advapi32" fn RegOpenKeyExA(
+    key: HKEY,
+    lpSubKey: std.os.windows.LPCSTR,
+    ulOptions: std.os.windows.DWORD,
+    samDesired: std.os.windows.REGSAM,
+    phkResult: *HKEY,
+) callconv(std.os.windows.WINAPI) std.os.windows.LSTATUS;
+extern "advapi32" fn RegCloseKey(key: HKEY) callconv(std.os.windows.WINAPI) std.os.windows.LSTATUS;
+extern "advapi32" fn RegEnumValueA(
+    hKey: HKEY,
+    dwIndex: std.os.windows.DWORD,
+    lpValueName: std.os.windows.LPSTR,
+    lpcchValueName: *std.os.windows.DWORD,
+    lpReserved: ?*std.os.windows.DWORD,
+    lpType: ?*std.os.windows.DWORD,
+    lpData: [*]std.os.windows.BYTE,
+    lpcbData: *std.os.windows.DWORD,
+) callconv(std.os.windows.WINAPI) std.os.windows.LSTATUS;
 
 const LinuxPortIterator = struct {
     const Self = @This();
@@ -74,6 +146,59 @@ const LinuxPortIterator = struct {
                     .display_name = path,
                     .driver = std.fs.path.basename(link),
                 };
+            } else {
+                return null;
+            }
+        }
+        return null;
+    }
+};
+
+const DarwinPortIterator = struct {
+    const Self = @This();
+
+    const root_dir = "/dev/";
+
+    dir: std.fs.IterableDir,
+    iterator: std.fs.IterableDir.Iterator,
+
+    full_path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined,
+    driver_path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined,
+
+    pub fn init() !Self {
+        var dir = try std.fs.cwd().openIterableDir(root_dir, .{});
+        errdefer dir.close();
+
+        return Self{
+            .dir = dir,
+            .iterator = dir.iterate(),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.dir.close();
+        self.* = undefined;
+    }
+
+    pub fn next(self: *Self) !?SerialPortDescription {
+        while (true) {
+            if (try self.iterator.next()) |entry| {
+                if (!std.mem.startsWith(u8, entry.name, "cu.")) {
+                    continue;
+                } else {
+                    var fba = std.heap.FixedBufferAllocator.init(&self.full_path_buffer);
+
+                    const path = try std.fs.path.join(fba.allocator(), &.{
+                        "/dev/",
+                        entry.name,
+                    });
+
+                    return SerialPortDescription{
+                        .file_name = path,
+                        .display_name = path,
+                        .driver = "darwin",
+                    };
+                }
             } else {
                 return null;
             }
@@ -152,22 +277,27 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             if (GetCommState(port.handle, &dcb) == 0)
                 return error.WindowsError;
 
-            // std.debug.warn("dcb = {}\n", .{dcb});
+            var flags = DCBFlags.fromNumeric(dcb.flags);
+
+            // std.log.err("{s} {s}", .{ dcb, flags });
 
             dcb.BaudRate = config.baud_rate;
-            dcb.fBinary = 1;
-            dcb.fParity = if (config.parity != .none) @as(u1, 1) else @as(u1, 0);
-            dcb.fOutxCtsFlow = if (config.handshake == .hardware) @as(u1, 1) else @as(u1, 0);
-            dcb.fOutxDsrFlow = 0;
-            dcb.fDtrControl = 0;
-            dcb.fDsrSensitivity = 0;
-            dcb.fTXContinueOnXoff = 0;
-            dcb.fOutX = if (config.handshake == .software) @as(u1, 1) else @as(u1, 0);
-            dcb.fInX = if (config.handshake == .software) @as(u1, 1) else @as(u1, 0);
-            dcb.fErrorChar = 0;
-            dcb.fNull = 0;
-            dcb.fRtsControl = if (config.handshake == .hardware) @as(u1, 1) else @as(u1, 0);
-            dcb.fAbortOnError = 0;
+
+            flags.fBinary = 1;
+            flags.fParity = if (config.parity != .none) @as(u1, 1) else @as(u1, 0);
+            flags.fOutxCtsFlow = if (config.handshake == .hardware) @as(u1, 1) else @as(u1, 0);
+            flags.fOutxDsrFlow = 0;
+            flags.fDtrControl = 0;
+            flags.fDsrSensitivity = 0;
+            flags.fTXContinueOnXoff = 0;
+            flags.fOutX = if (config.handshake == .software) @as(u1, 1) else @as(u1, 0);
+            flags.fInX = if (config.handshake == .software) @as(u1, 1) else @as(u1, 0);
+            flags.fErrorChar = 0;
+            flags.fNull = 0;
+            flags.fRtsControl = if (config.handshake == .hardware) @as(u1, 1) else @as(u1, 0);
+            flags.fAbortOnError = 0;
+            dcb.flags = flags.toNumeric();
+
             dcb.wReserved = 0;
             dcb.ByteSize = config.word_size;
             dcb.Parity = switch (config.parity) {
@@ -188,49 +318,60 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             if (SetCommState(port.handle, &dcb) == 0)
                 return error.WindowsError;
         },
-        .linux => {
+        .linux, .macos => |tag| {
             var settings = try std.os.tcgetattr(port.handle);
+
+            const os = switch (tag) {
+                .macos => std.os.darwin,
+                .linux => std.os.linux,
+                else => unreachable,
+            };
 
             settings.iflag = 0;
             settings.oflag = 0;
-            settings.cflag = std.os.linux.CREAD;
+            settings.cflag = os.CREAD;
             settings.lflag = 0;
             settings.ispeed = 0;
             settings.ospeed = 0;
 
             switch (config.parity) {
                 .none => {},
-                .odd => settings.cflag |= std.os.linux.PARODD,
+                .odd => settings.cflag |= os.PARODD,
                 .even => {}, // even parity is default when parity is enabled
-                .mark => settings.cflag |= std.os.linux.PARODD | CMSPAR,
+                .mark => settings.cflag |= os.PARODD | CMSPAR,
                 .space => settings.cflag |= CMSPAR,
             }
             if (config.parity != .none) {
-                settings.iflag |= std.os.linux.INPCK; // enable parity checking
-                settings.cflag |= std.os.linux.PARENB; // enable parity generation
+                settings.iflag |= os.INPCK; // enable parity checking
+                settings.cflag |= os.PARENB; // enable parity generation
             }
 
             switch (config.handshake) {
-                .none => settings.cflag |= std.os.linux.CLOCAL,
-                .software => settings.iflag |= std.os.linux.IXON | std.os.linux.IXOFF,
+                .none => settings.cflag |= os.CLOCAL,
+                .software => settings.iflag |= os.IXON | os.IXOFF,
                 .hardware => settings.cflag |= CRTSCTS,
             }
 
             switch (config.stop_bits) {
                 .one => {},
-                .two => settings.cflag |= std.os.linux.CSTOPB,
+                .two => settings.cflag |= os.CSTOPB,
             }
 
             switch (config.word_size) {
-                5 => settings.cflag |= std.os.linux.CS5,
-                6 => settings.cflag |= std.os.linux.CS6,
-                7 => settings.cflag |= std.os.linux.CS7,
-                8 => settings.cflag |= std.os.linux.CS8,
+                5 => settings.cflag |= os.CS5,
+                6 => settings.cflag |= os.CS6,
+                7 => settings.cflag |= os.CS7,
+                8 => settings.cflag |= os.CS8,
                 else => return error.UnsupportedWordSize,
             }
 
-            const baudmask = try mapBaudToLinuxEnum(config.baud_rate);
-            settings.cflag &= ~@as(std.os.linux.tcflag_t, CBAUD);
+            const baudmask = switch (tag) {
+                .macos => try mapBaudToMacOSEnum(config.baud_rate),
+                .linux => try mapBaudToLinuxEnum(config.baud_rate),
+                else => unreachable,
+            };
+
+            settings.cflag &= ~@as(os.tcflag_t, CBAUD);
             settings.cflag |= baudmask;
             settings.ispeed = baudmask;
             settings.ospeed = baudmask;
@@ -250,6 +391,9 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
 /// the receive buffer is flushed, if `output` is set all pending data in
 /// the send buffer is flushed.
 pub fn flushSerialPort(port: std.fs.File, input: bool, output: bool) !void {
+    if (!input and !output)
+        return;
+
     switch (builtin.os.tag) {
         .windows => {
             const success = if (input and output)
@@ -271,7 +415,75 @@ pub fn flushSerialPort(port: std.fs.File, input: bool, output: bool) !void {
         else if (output)
             try tcflush(port.handle, TCOFLUSH),
 
+        .macos => if (input and output)
+            try tcflush(port.handle, c.TCIOFLUSH)
+        else if (input)
+            try tcflush(port.handle, c.TCIFLUSH)
+        else if (output)
+            try tcflush(port.handle, c.TCOFLUSH),
+
         else => @compileError("unsupported OS, please implement!"),
+    }
+}
+
+pub const ControlPins = struct {
+    rts: ?bool = null,
+    dtr: ?bool = null,
+};
+
+pub fn changeControlPins(port: std.fs.File, pins: ControlPins) !void {
+    switch (builtin.os.tag) {
+        .windows => {
+            const CLRDTR = 6;
+            const CLRRTS = 4;
+            const SETDTR = 5;
+            const SETRTS = 3;
+
+            if (pins.dtr) |dtr| {
+                if (EscapeCommFunction(port.handle, if (dtr) SETDTR else CLRDTR) == 0)
+                    return error.WindowsError;
+            }
+            if (pins.rts) |rts| {
+                if (EscapeCommFunction(port.handle, if (rts) SETRTS else CLRRTS) == 0)
+                    return error.WindowsError;
+            }
+        },
+        .linux => {
+            const TIOCM_RTS: c_int = 0x004;
+            const TIOCM_DTR: c_int = 0x002;
+
+            // from /usr/include/asm-generic/ioctls.h
+            // const TIOCMBIS: u32 = 0x5416;
+            // const TIOCMBIC: u32 = 0x5417;
+            const TIOCMGET: u32 = 0x5415;
+            const TIOCMSET: u32 = 0x5418;
+
+            var flags: c_int = 0;
+            if (std.os.linux.ioctl(port.handle, TIOCMGET, @ptrToInt(&flags)) != 0)
+                return error.Unexpected;
+
+            if (pins.dtr) |dtr| {
+                if (dtr) {
+                    flags |= TIOCM_DTR;
+                } else {
+                    flags &= ~TIOCM_DTR;
+                }
+            }
+            if (pins.rts) |rts| {
+                if (rts) {
+                    flags |= TIOCM_RTS;
+                } else {
+                    flags &= ~TIOCM_RTS;
+                }
+            }
+
+            if (std.os.linux.ioctl(port.handle, TIOCMSET, @ptrToInt(&flags)) != 0)
+                return error.Unexpected;
+        },
+
+        .macos => {},
+
+        else => @compileError("changeControlPins not implemented for " ++ @tagName(builtin.os.tag)),
     }
 }
 
@@ -280,7 +492,8 @@ const PURGE_RXCLEAR = 0x0008;
 const PURGE_TXABORT = 0x0001;
 const PURGE_TXCLEAR = 0x0004;
 
-extern "kernel32" fn PurgeComm(hFile: std.os.windows.HANDLE, dwFlags: std.os.windows.DWORD) callconv(.Stdcall) std.os.windows.BOOL;
+extern "kernel32" fn PurgeComm(hFile: std.os.windows.HANDLE, dwFlags: std.os.windows.DWORD) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+extern "kernel32" fn EscapeCommFunction(hFile: std.os.windows.HANDLE, dwFunc: std.os.windows.DWORD) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
 
 const TCIFLUSH = 0;
 const TCOFLUSH = 1;
@@ -288,8 +501,20 @@ const TCIOFLUSH = 2;
 const TCFLSH = 0x540B;
 
 fn tcflush(fd: std.os.fd_t, mode: usize) !void {
-    if (std.os.linux.syscall3(.ioctl, @bitCast(usize, @as(isize, fd)), TCFLSH, mode) != 0)
-        return error.FlushError;
+    switch (builtin.os.tag) {
+        .linux => {
+            if (std.os.linux.syscall3(.ioctl, @bitCast(usize, @as(isize, fd)), TCFLSH, mode) != 0)
+                return error.FlushError;
+        },
+        .macos => {
+            const err = c.tcflush(fd, @intCast(c_int, mode));
+            if (err != 0) {
+                std.debug.print("tcflush failed: {d}\r\n", .{err});
+                return error.FlushError;
+            }
+        },
+        else => @compileError("unsupported OS, please implement!"),
+    }
 }
 
 fn mapBaudToLinuxEnum(baudrate: usize) !std.os.linux.speed_t {
@@ -330,23 +555,102 @@ fn mapBaudToLinuxEnum(baudrate: usize) !std.os.linux.speed_t {
     };
 }
 
+fn mapBaudToMacOSEnum(baudrate: usize) !std.os.darwin.speed_t {
+    return switch (baudrate) {
+        // from termios.h
+        50 => std.os.darwin.B50,
+        75 => std.os.darwin.B75,
+        110 => std.os.darwin.B110,
+        134 => std.os.darwin.B134,
+        150 => std.os.darwin.B150,
+        200 => std.os.darwin.B200,
+        300 => std.os.darwin.B300,
+        600 => std.os.darwin.B600,
+        1200 => std.os.darwin.B1200,
+        1800 => std.os.darwin.B1800,
+        2400 => std.os.darwin.B2400,
+        4800 => std.os.darwin.B4800,
+        9600 => std.os.darwin.B9600,
+        19200 => std.os.darwin.B19200,
+        38400 => std.os.darwin.B38400,
+        7200 => std.os.darwin.B7200,
+        14400 => std.os.darwin.B14400,
+        28800 => std.os.darwin.B28800,
+        57600 => std.os.darwin.B57600,
+        76800 => std.os.darwin.B76800,
+        115200 => std.os.darwin.B115200,
+        230400 => std.os.darwin.B230400,
+        else => error.UnsupportedBaudRate,
+    };
+}
+
+const DCBFlags = struct {
+    fBinary: u1, // u1
+    fParity: u1, // u1
+    fOutxCtsFlow: u1, // u1
+    fOutxDsrFlow: u1, // u1
+    fDtrControl: u2, // u2
+    fDsrSensitivity: u1, // u1
+    fTXContinueOnXoff: u1, // u1
+    fOutX: u1, // u1
+    fInX: u1, // u1
+    fErrorChar: u1, // u1
+    fNull: u1, // u1
+    fRtsControl: u2, // u2
+    fAbortOnError: u1, // u1
+    fDummy2: u17 = 0, // u17
+
+    // TODO: Packed structs please
+    pub fn fromNumeric(value: u32) DCBFlags {
+        var flags: DCBFlags = undefined;
+        flags.fBinary = @truncate(u1, value >> 0); // u1
+        flags.fParity = @truncate(u1, value >> 1); // u1
+        flags.fOutxCtsFlow = @truncate(u1, value >> 2); // u1
+        flags.fOutxDsrFlow = @truncate(u1, value >> 3); // u1
+        flags.fDtrControl = @truncate(u2, value >> 4); // u2
+        flags.fDsrSensitivity = @truncate(u1, value >> 6); // u1
+        flags.fTXContinueOnXoff = @truncate(u1, value >> 7); // u1
+        flags.fOutX = @truncate(u1, value >> 8); // u1
+        flags.fInX = @truncate(u1, value >> 9); // u1
+        flags.fErrorChar = @truncate(u1, value >> 10); // u1
+        flags.fNull = @truncate(u1, value >> 11); // u1
+        flags.fRtsControl = @truncate(u2, value >> 12); // u2
+        flags.fAbortOnError = @truncate(u1, value >> 14); // u1
+        flags.fDummy2 = @truncate(u17, value >> 15); // u17
+        return flags;
+    }
+
+    pub fn toNumeric(self: DCBFlags) u32 {
+        var value: u32 = 0;
+        value += @as(u32, self.fBinary) << 0; // u1
+        value += @as(u32, self.fParity) << 1; // u1
+        value += @as(u32, self.fOutxCtsFlow) << 2; // u1
+        value += @as(u32, self.fOutxDsrFlow) << 3; // u1
+        value += @as(u32, self.fDtrControl) << 4; // u2
+        value += @as(u32, self.fDsrSensitivity) << 6; // u1
+        value += @as(u32, self.fTXContinueOnXoff) << 7; // u1
+        value += @as(u32, self.fOutX) << 8; // u1
+        value += @as(u32, self.fInX) << 9; // u1
+        value += @as(u32, self.fErrorChar) << 10; // u1
+        value += @as(u32, self.fNull) << 11; // u1
+        value += @as(u32, self.fRtsControl) << 12; // u2
+        value += @as(u32, self.fAbortOnError) << 14; // u1
+        value += @as(u32, self.fDummy2) << 15; // u17
+        return value;
+    }
+};
+
+test "DCBFlags" {
+    var rand: u32 = 0;
+    try std.os.getrandom(@ptrCast(*[4]u8, &rand));
+    var flags = DCBFlags.fromNumeric(rand);
+    try std.testing.expectEqual(rand, flags.toNumeric());
+}
+
 const DCB = extern struct {
     DCBlength: std.os.windows.DWORD,
     BaudRate: std.os.windows.DWORD,
-    fBinary: std.os.windows.DWORD, // u1
-    fParity: std.os.windows.DWORD, // u1
-    fOutxCtsFlow: std.os.windows.DWORD, // u1
-    fOutxDsrFlow: std.os.windows.DWORD, // u1
-    fDtrControl: std.os.windows.DWORD, // u2
-    fDsrSensitivity: std.os.windows.DWORD,
-    fTXContinueOnXoff: std.os.windows.DWORD,
-    fOutX: std.os.windows.DWORD, // u1
-    fInX: std.os.windows.DWORD, // u1
-    fErrorChar: std.os.windows.DWORD, // u1
-    fNull: std.os.windows.DWORD, // u1
-    fRtsControl: std.os.windows.DWORD, // u2
-    fAbortOnError: std.os.windows.DWORD, // u1
-    fDummy2: std.os.windows.DWORD, // u17
+    flags: u32,
     wReserved: std.os.windows.WORD,
     XonLim: std.os.windows.WORD,
     XoffLim: std.os.windows.WORD,
@@ -361,36 +665,59 @@ const DCB = extern struct {
     wReserved1: std.os.windows.WORD,
 };
 
-extern "kernel32" fn GetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(.Stdcall) std.os.windows.BOOL;
-extern "kernel32" fn SetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(.Stdcall) std.os.windows.BOOL;
+extern "kernel32" fn GetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+extern "kernel32" fn SetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+
+test "iterate ports" {
+    var it = try list();
+    while (try it.next()) |port| {
+        _ = port;
+        // std.debug.print("{s} (file: {s}, driver: {s})\n", .{ port.display_name, port.file_name, port.driver });
+    }
+}
 
 test "basic configuration test" {
     var cfg = SerialConfig{
         .handshake = .none,
-        .baud_rate = 9600,
+        .baud_rate = 115200,
         .parity = .none,
         .word_size = 8,
         .stop_bits = .one,
     };
 
-    var port = try std.fs.cwd().openFile(
-        if (std.builtin.os.tag == .windows) "\\\\.\\COM5" else "/dev/ttyUSB0", // if any, these will likely exist on a machine
-        .{ .read = true, .write = true },
-    );
+    var tty: []const u8 = undefined;
+
+    switch (builtin.os.tag) {
+        .windows => tty = "\\\\.\\COM3",
+        .linux => tty = "/dev/ttyUSB0",
+        .macos => tty = "/dev/cu.usbmodem101",
+        else => unreachable,
+    }
+
+    var port = try std.fs.cwd().openFile(tty, .{ .mode = .read_write });
     defer port.close();
 
     try configureSerialPort(port, cfg);
 }
 
 test "basic flush test" {
-    var port = try std.fs.cwd().openFile(
-        if (std.builtin.os.tag == .windows) "\\\\.\\COM5" else "/dev/ttyUSB0", // if any, these will likely exist on a machine
-        .{ .read = true, .write = true },
-    );
+    var tty: []const u8 = undefined;
+    // if any, these will likely exist on a machine
+    switch (builtin.os.tag) {
+        .windows => tty = "\\\\.\\COM3",
+        .linux => tty = "/dev/ttyUSB0",
+        .macos => tty = "/dev/cu.usbmodem101",
+        else => unreachable,
+    }
+    var port = try std.fs.cwd().openFile(tty, .{ .mode = .read_write });
     defer port.close();
 
     try flushSerialPort(port, true, true);
     try flushSerialPort(port, true, false);
     try flushSerialPort(port, false, true);
     try flushSerialPort(port, false, false);
+}
+
+test "change control pins" {
+    _ = changeControlPins;
 }

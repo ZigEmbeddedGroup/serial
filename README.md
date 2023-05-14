@@ -12,7 +12,7 @@ Helper library for configuring and listing serial ports.
   - Byte Size (5, 6, 7, 8)
 - Flushing of the serial port receive buffers
 - Supports windows and linux with the API
-- Listing available serial ports (currently only on linux)
+- Listing available serial ports
 
 ## Example
 
