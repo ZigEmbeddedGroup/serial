@@ -35,7 +35,7 @@ const WindowsPortIterator = struct {
     data_size: u32 = 256,
 
     pub fn init() !Self {
-        const HKEY_LOCAL_MACHINE = @intToPtr(HKEY, 0x80000002);
+        const HKEY_LOCAL_MACHINE = @as(HKEY, @ptrFromInt(0x80000002));
         const KEY_READ = 0x20019;
 
         var self: Self = undefined;
@@ -459,7 +459,7 @@ pub fn changeControlPins(port: std.fs.File, pins: ControlPins) !void {
             const TIOCMSET: u32 = 0x5418;
 
             var flags: c_int = 0;
-            if (std.os.linux.ioctl(port.handle, TIOCMGET, @ptrToInt(&flags)) != 0)
+            if (std.os.linux.ioctl(port.handle, TIOCMGET, @intFromPtr(&flags)) != 0)
                 return error.Unexpected;
 
             if (pins.dtr) |dtr| {
@@ -477,7 +477,7 @@ pub fn changeControlPins(port: std.fs.File, pins: ControlPins) !void {
                 }
             }
 
-            if (std.os.linux.ioctl(port.handle, TIOCMSET, @ptrToInt(&flags)) != 0)
+            if (std.os.linux.ioctl(port.handle, TIOCMSET, @intFromPtr(&flags)) != 0)
                 return error.Unexpected;
         },
 
@@ -503,11 +503,11 @@ const TCFLSH = 0x540B;
 fn tcflush(fd: std.os.fd_t, mode: usize) !void {
     switch (builtin.os.tag) {
         .linux => {
-            if (std.os.linux.syscall3(.ioctl, @bitCast(usize, @as(isize, fd)), TCFLSH, mode) != 0)
+            if (std.os.linux.syscall3(.ioctl, @as(usize, @bitCast(@as(isize, fd))), TCFLSH, mode) != 0)
                 return error.FlushError;
         },
         .macos => {
-            const err = c.tcflush(fd, @intCast(c_int, mode));
+            const err = c.tcflush(fd, @as(c_int, @intCast(mode)));
             if (err != 0) {
                 std.debug.print("tcflush failed: {d}\r\n", .{err});
                 return error.FlushError;
@@ -603,20 +603,20 @@ const DCBFlags = struct {
     // TODO: Packed structs please
     pub fn fromNumeric(value: u32) DCBFlags {
         var flags: DCBFlags = undefined;
-        flags.fBinary = @truncate(u1, value >> 0); // u1
-        flags.fParity = @truncate(u1, value >> 1); // u1
-        flags.fOutxCtsFlow = @truncate(u1, value >> 2); // u1
-        flags.fOutxDsrFlow = @truncate(u1, value >> 3); // u1
-        flags.fDtrControl = @truncate(u2, value >> 4); // u2
-        flags.fDsrSensitivity = @truncate(u1, value >> 6); // u1
-        flags.fTXContinueOnXoff = @truncate(u1, value >> 7); // u1
-        flags.fOutX = @truncate(u1, value >> 8); // u1
-        flags.fInX = @truncate(u1, value >> 9); // u1
-        flags.fErrorChar = @truncate(u1, value >> 10); // u1
-        flags.fNull = @truncate(u1, value >> 11); // u1
-        flags.fRtsControl = @truncate(u2, value >> 12); // u2
-        flags.fAbortOnError = @truncate(u1, value >> 14); // u1
-        flags.fDummy2 = @truncate(u17, value >> 15); // u17
+        flags.fBinary = @as(u1, @truncate(value >> 0)); // u1
+        flags.fParity = @as(u1, @truncate(value >> 1)); // u1
+        flags.fOutxCtsFlow = @as(u1, @truncate(value >> 2)); // u1
+        flags.fOutxDsrFlow = @as(u1, @truncate(value >> 3)); // u1
+        flags.fDtrControl = @as(u2, @truncate(value >> 4)); // u2
+        flags.fDsrSensitivity = @as(u1, @truncate(value >> 6)); // u1
+        flags.fTXContinueOnXoff = @as(u1, @truncate(value >> 7)); // u1
+        flags.fOutX = @as(u1, @truncate(value >> 8)); // u1
+        flags.fInX = @as(u1, @truncate(value >> 9)); // u1
+        flags.fErrorChar = @as(u1, @truncate(value >> 10)); // u1
+        flags.fNull = @as(u1, @truncate(value >> 11)); // u1
+        flags.fRtsControl = @as(u2, @truncate(value >> 12)); // u2
+        flags.fAbortOnError = @as(u1, @truncate(value >> 14)); // u1
+        flags.fDummy2 = @as(u17, @truncate(value >> 15)); // u17
         return flags;
     }
 
@@ -642,7 +642,7 @@ const DCBFlags = struct {
 
 test "DCBFlags" {
     var rand: u32 = 0;
-    try std.os.getrandom(@ptrCast(*[4]u8, &rand));
+    try std.os.getrandom(@as(*[4]u8, @ptrCast(&rand)));
     var flags = DCBFlags.fromNumeric(rand);
     try std.testing.expectEqual(rand, flags.toNumeric());
 }
