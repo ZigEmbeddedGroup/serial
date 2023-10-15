@@ -6,11 +6,21 @@ pub fn list() !PortIterator {
     return try PortIterator.init();
 }
 
+pub fn list_info() !InformationIterator {
+    return try InformationIterator.init();
+}
+
 pub const PortIterator = switch (builtin.os.tag) {
     .windows => WindowsPortIterator,
     .linux => LinuxPortIterator,
     .macos => DarwinPortIterator,
     else => @compileError("OS is not supported for port iteration"),
+};
+
+pub const InformationIterator = switch (builtin.os.tag) {
+    .windows => WindowsInformationIterator,
+    .linux, .macos => @panic("'Port Information' not yet implemented for this OS"),
+    else => @compileError("OS is not supported for information iteration"),
 };
 
 pub const SerialPortDescription = struct {
@@ -19,7 +29,27 @@ pub const SerialPortDescription = struct {
     driver: ?[]const u8,
 };
 
-const HKEY = std.os.windows.HANDLE;
+pub const PortInformation = struct {
+    port_name: []const u8,
+    system_location: []const u8,
+    friendly_name: []const u8,
+    description: []const u8,
+    manufacturer: []const u8,
+    serial_number: []const u8,
+    vid: u16,
+    pid: u16,
+};
+
+const HKEY = std.os.windows.HKEY;
+const HWND = std.os.windows.HANDLE;
+const HDEVINFO = std.os.windows.HANDLE;
+const DEVINST = std.os.windows.DWORD;
+const SP_DEVINFO_DATA = extern struct {
+    cbSize: std.os.windows.DWORD,
+    classGuid: std.os.windows.GUID,
+    devInst: std.os.windows.DWORD,
+    reserved: std.os.windows.ULONG_PTR,
+};
 
 const WindowsPortIterator = struct {
     const Self = @This();
@@ -69,6 +99,217 @@ const WindowsPortIterator = struct {
     }
 };
 
+const WindowsInformationIterator = struct {
+    const Self = @This();
+
+    index: std.os.windows.DWORD,
+    device_info_set: HDEVINFO,
+
+    port_buffer: [256]u8,
+    sys_buffer: [256]u8,
+    name_buffer: [256]u8,
+    desc_buffer: [256]u8,
+    man_buffer: [256]u8,
+    serial_buffer: [256]u8,
+    hw_id: [256]u8,
+
+    const Property = enum(std.os.windows.DWORD) {
+        SPDRP_DEVICEDESC = 0x00000000,
+        SPDRP_MFG = 0x0000000B,
+        SPDRP_FRIENDLYNAME = 0x0000000C,
+    };
+
+    // GUID taken from <devguid.h>
+    const DIGCF_PRESENT = 0x00000002;
+    const DIGCF_DEVICEINTERFACE = 0x00000010;
+    const device_setup_tokens = .{
+        .{ std.os.windows.GUID{ .Data1 = 0x4d36e978, .Data2 = 0xe325, .Data3 = 0x11ce, .Data4 = .{ 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } }, DIGCF_PRESENT },
+        .{ std.os.windows.GUID{ .Data1 = 0x4d36e96d, .Data2 = 0xe325, .Data3 = 0x11ce, .Data4 = .{ 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } }, DIGCF_PRESENT },
+        .{ std.os.windows.GUID{ .Data1 = 0x86e0d1e0, .Data2 = 0x8089, .Data3 = 0x11d0, .Data4 = .{ 0x9c, 0xe4, 0x08, 0x00, 0x3e, 0x30, 0x1f, 0x73 } }, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE },
+        .{ std.os.windows.GUID{ .Data1 = 0x2c7089aa, .Data2 = 0x2e0e, .Data3 = 0x11d1, .Data4 = .{ 0xb1, 0x14, 0x00, 0xc0, 0x4f, 0xc2, 0xaa, 0xe4 } }, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE },
+    };
+
+    pub fn init() !Self {
+        var self: Self = undefined;
+        self.index = 0;
+
+        inline for (device_setup_tokens) |token| {
+            const guid = token[0];
+            const flags = token[1];
+
+            self.device_info_set = SetupDiGetClassDevsW(
+                &guid,
+                null,
+                null,
+                flags,
+            );
+
+            if (self.device_info_set != std.os.windows.INVALID_HANDLE_VALUE) break;
+        }
+
+        if (self.device_info_set == std.os.windows.INVALID_HANDLE_VALUE) return error.WindowsError;
+
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        _ = SetupDiDestroyDeviceInfoList(self.device_info_set);
+        self.* = undefined;
+    }
+
+    pub fn next(self: *Self) !?PortInformation {
+        var device_info_data: SP_DEVINFO_DATA = .{
+            .cbSize = @sizeOf(SP_DEVINFO_DATA),
+            .classGuid = std.mem.zeroes(std.os.windows.GUID),
+            .devInst = 0,
+            .reserved = 0,
+        };
+
+        if (SetupDiEnumDeviceInfo(self.device_info_set, self.index, &device_info_data) != std.os.windows.TRUE) {
+            return null;
+        }
+
+        defer self.index += 1;
+
+        var info: PortInformation = std.mem.zeroes(PortInformation);
+        // var port_buffer: [256]u8 = undefined;
+        // var sys_buffer: [256]u8 = undefined;
+
+        var length = getPortName(&self.device_info_set, &device_info_data, &self.port_buffer);
+        info.port_name = self.port_buffer[0..length];
+
+        info.system_location = try std.fmt.bufPrint(&self.sys_buffer, "\\\\.\\{s}", .{info.port_name});
+
+        length = deviceRegistryProperty(&self.device_info_set, &device_info_data, Property.SPDRP_FRIENDLYNAME, &self.name_buffer);
+        info.friendly_name = self.name_buffer[0..length];
+
+        length = deviceRegistryProperty(&self.device_info_set, &device_info_data, Property.SPDRP_DEVICEDESC, &self.desc_buffer);
+        info.description = self.desc_buffer[0..length];
+
+        length = deviceRegistryProperty(&self.device_info_set, &device_info_data, Property.SPDRP_MFG, &self.man_buffer);
+        info.manufacturer = self.man_buffer[0..length];
+
+        if (SetupDiGetDeviceInstanceIdA(
+            self.device_info_set,
+            &device_info_data,
+            @ptrCast(&self.hw_id),
+            // @as(?*std.os.windows.CHAR, @ptrCast(&self.hw_id)),
+            256,
+            null,
+        ) == std.os.windows.TRUE) {
+            length = parseSerialNumber(&self.hw_id, &self.serial_buffer) catch 0;
+            info.serial_number = self.serial_buffer[0..length];
+            info.vid = parseVendorId(&self.hw_id) catch 0;
+            info.pid = parseProductId(&self.hw_id) catch 0;
+        } else {
+            return error.WindowsError;
+        }
+
+        // parseSerialNumber
+
+        return info;
+    }
+
+    fn getPortName(device_info_set: *const HDEVINFO, device_info_data: *SP_DEVINFO_DATA, port_name: [*]u8) std.os.windows.DWORD {
+        const hkey: HKEY = SetupDiOpenDevRegKey(
+            device_info_set.*,
+            device_info_data,
+            0x00000001, // #define DICS_FLAG_GLOBAL
+            0,
+            0x00000001, // #define DIREG_DEV,
+            std.os.windows.KEY_READ,
+        );
+
+        defer {
+            _ = std.os.windows.advapi32.RegCloseKey(hkey);
+        }
+
+        // if (hkey == std.os.windows.INVALID_HANDLE_VALUE)  return error.std.os.Windows;
+
+        inline for (.{ "PortName", "PortNumber" }) |key_token| {
+            var port_length: std.os.windows.DWORD = std.os.windows.NAME_MAX;
+            var data_type: std.os.windows.DWORD = 0;
+
+            const result = std.os.windows.advapi32.RegQueryValueExW(
+                hkey,
+                std.unicode.utf8ToUtf16LeStringLiteral(key_token),
+                null,
+                &data_type,
+                @as(?*std.os.windows.BYTE, @ptrCast(port_name)),
+                &port_length,
+            );
+
+            // if this is valid, return now
+            if (result == 0 and port_length > 0) {
+                return port_length;
+            }
+        }
+
+        return 0;
+    }
+
+    fn deviceRegistryProperty(device_info_set: *const HDEVINFO, device_info_data: *SP_DEVINFO_DATA, property: Property, property_str: [*]u8) std.os.windows.DWORD {
+        var data_type: std.os.windows.DWORD = 0;
+        var bytes_required: std.os.windows.DWORD = std.os.windows.MAX_PATH;
+
+        const result = SetupDiGetDeviceRegistryPropertyW(
+            device_info_set.*,
+            device_info_data,
+            @intFromEnum(property),
+            &data_type,
+            @as(?*std.os.windows.BYTE, @ptrCast(property_str)),
+            std.os.windows.NAME_MAX,
+            &bytes_required,
+        );
+
+        if (result == std.os.windows.FALSE) {
+            std.debug.print("GetLastError: {}\n", .{std.os.windows.kernel32.GetLastError()});
+            bytes_required = 0;
+        }
+
+        return bytes_required;
+    }
+
+    fn parseSerialNumber(devid: []const u8, serial_number: [*]u8) !std.os.windows.DWORD {
+        var it = std.mem.tokenize(u8, devid, "\\+");
+
+        // throw away the start
+        _ = it.next();
+        while (it.next()) |segment| {
+            if (std.mem.startsWith(u8, segment, "VID_")) continue;
+            if (std.mem.startsWith(u8, segment, "PID_")) continue;
+            @memcpy(serial_number, segment);
+            return @as(std.os.windows.DWORD, @truncate(segment.len));
+        }
+
+        return error.WindowsError;
+    }
+
+    fn parseVendorId(devid: []const u8) !u16 {
+        var it = std.mem.tokenize(u8, devid, "\\+");
+
+        while (it.next()) |segment| {
+            if (std.mem.startsWith(u8, segment, "VID_")) {
+                return try std.fmt.parseInt(u16, segment[4..], 16);
+            }
+        }
+
+        return error.WindowsError;
+    }
+
+    fn parseProductId(devid: []const u8) !u16 {
+        var it = std.mem.tokenize(u8, devid, "\\+");
+
+        while (it.next()) |segment| {
+            if (std.mem.startsWith(u8, segment, "PID_")) {
+                return try std.fmt.parseInt(u16, segment[4..], 16);
+            }
+        }
+
+        return error.WindowsError;
+    }
+};
+
 extern "advapi32" fn RegOpenKeyExA(
     key: HKEY,
     lpSubKey: std.os.windows.LPCSTR,
@@ -87,6 +328,42 @@ extern "advapi32" fn RegEnumValueA(
     lpData: [*]std.os.windows.BYTE,
     lpcbData: *std.os.windows.DWORD,
 ) callconv(std.os.windows.WINAPI) std.os.windows.LSTATUS;
+extern "setupapi" fn SetupDiGetClassDevsW(
+    classGuid: ?*const std.os.windows.GUID,
+    enumerator: ?std.os.windows.PCWSTR,
+    hwndParanet: ?HWND,
+    flags: std.os.windows.DWORD,
+) callconv(std.os.windows.WINAPI) HDEVINFO;
+extern "setupapi" fn SetupDiEnumDeviceInfo(
+    devInfoSet: HDEVINFO,
+    memberIndex: std.os.windows.DWORD,
+    device_info_data: *SP_DEVINFO_DATA,
+) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+extern "setupapi" fn SetupDiDestroyDeviceInfoList(device_info_set: HDEVINFO) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+extern "setupapi" fn SetupDiOpenDevRegKey(
+    device_info_set: HDEVINFO,
+    device_info_data: *SP_DEVINFO_DATA,
+    scope: std.os.windows.DWORD,
+    hwProfile: std.os.windows.DWORD,
+    keyType: std.os.windows.DWORD,
+    samDesired: std.os.windows.REGSAM,
+) callconv(std.os.windows.WINAPI) HKEY;
+extern "setupapi" fn SetupDiGetDeviceRegistryPropertyW(
+    hDevInfo: HDEVINFO,
+    pSpDevInfoData: *SP_DEVINFO_DATA,
+    property: std.os.windows.DWORD,
+    propertyRegDataType: ?*std.os.windows.DWORD,
+    propertyBuffer: ?*std.os.windows.BYTE,
+    propertyBufferSize: std.os.windows.DWORD,
+    requiredSize: ?*std.os.windows.DWORD,
+) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+extern "setupapi" fn SetupDiGetDeviceInstanceIdA(
+    device_info_set: HDEVINFO,
+    device_info_data: *SP_DEVINFO_DATA,
+    deviceInstanceId: *?std.os.windows.CHAR,
+    deviceInstanceIdSize: std.os.windows.DWORD,
+    requiredSize: ?*std.os.windows.DWORD,
+) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
 
 const LinuxPortIterator = struct {
     const Self = @This();
