@@ -105,13 +105,13 @@ const WindowsInformationIterator = struct {
     index: std.os.windows.DWORD,
     device_info_set: HDEVINFO,
 
-    port_buffer: [256]u8,
-    sys_buffer: [256]u8,
-    name_buffer: [256]u8,
-    desc_buffer: [256]u8,
-    man_buffer: [256]u8,
-    serial_buffer: [256]u8,
-    hw_id: [256]u8,
+    port_buffer: [256:0]u8,
+    sys_buffer: [256:0]u8,
+    name_buffer: [256:0]u8,
+    desc_buffer: [256:0]u8,
+    man_buffer: [256:0]u8,
+    serial_buffer: [256:0]u8,
+    hw_id: [256:0]u8,
 
     const Property = enum(std.os.windows.DWORD) {
         SPDRP_DEVICEDESC = 0x00000000,
@@ -172,9 +172,8 @@ const WindowsInformationIterator = struct {
         defer self.index += 1;
 
         var info: PortInformation = std.mem.zeroes(PortInformation);
-        // var port_buffer: [256]u8 = undefined;
-        // var sys_buffer: [256]u8 = undefined;
 
+        // NOTE: have not handled if port startswith("LPT")
         var length = getPortName(&self.device_info_set, &device_info_data, &self.port_buffer);
         info.port_name = self.port_buffer[0..length];
 
@@ -193,19 +192,16 @@ const WindowsInformationIterator = struct {
             self.device_info_set,
             &device_info_data,
             @ptrCast(&self.hw_id),
-            // @as(?*std.os.windows.CHAR, @ptrCast(&self.hw_id)),
             256,
             null,
         ) == std.os.windows.TRUE) {
-            length = parseSerialNumber(&self.hw_id, &self.serial_buffer) catch 0;
+            length = parseSerialNumber(device_info_data.devInst, &self.hw_id, &self.serial_buffer) catch 0;
             info.serial_number = self.serial_buffer[0..length];
             info.vid = parseVendorId(&self.hw_id) catch 0;
             info.pid = parseProductId(&self.hw_id) catch 0;
         } else {
             return error.WindowsError;
         }
-
-        // parseSerialNumber
 
         return info;
     }
@@ -270,27 +266,62 @@ const WindowsInformationIterator = struct {
         return bytes_required;
     }
 
-    fn parseSerialNumber(devid: []const u8, serial_number: [*]u8) !std.os.windows.DWORD {
-        var it = std.mem.tokenize(u8, devid, "\\+");
+    fn parseSerialNumber(devinst: DEVINST, devid: []const u8, serial_number: [*]u8) !std.os.windows.DWORD {
+        var delimiter: ?[]const u8 = undefined;
+        var slice: []const u8 = undefined;
 
-        // throw away the start
-        _ = it.next();
-        while (it.next()) |segment| {
-            if (std.mem.startsWith(u8, segment, "VID_")) continue;
-            if (std.mem.startsWith(u8, segment, "PID_")) continue;
-            @memcpy(serial_number, segment);
-            return @as(std.os.windows.DWORD, @truncate(segment.len));
+        // TODO: test if this works for anything other than FTDI or using MS CDC driver
+        if (std.mem.startsWith(u8, devid, "USB")) {
+            delimiter = "\\&";
+
+            var parent_id: DEVINST = undefined;
+            var local_buffer: [256:0]u8 = std.mem.zeroes([256:0]u8);
+
+            if (CM_Get_Parent(&parent_id, devinst, 0) != 0) return error.WindowsError;
+            if (CM_Get_Device_IDA(parent_id, @ptrCast(&local_buffer), 256, 0) != 0) return error.WindowsError;
+
+            slice = local_buffer[0..256];
+        } else if (std.mem.startsWith(u8, devid, "FTDI")) {
+            delimiter = "\\+";
+            slice = devid;
+        } else {
+            delimiter = null;
+        }
+
+        if (delimiter) |del| {
+            var it = std.mem.tokenize(u8, slice, del);
+
+            // throw away the start
+            _ = it.next();
+            while (it.next()) |segment| {
+                if (std.mem.startsWith(u8, segment, "VID_")) continue;
+                if (std.mem.startsWith(u8, segment, "PID_")) continue;
+                @memcpy(serial_number, segment);
+                return @as(std.os.windows.DWORD, @truncate(segment.len));
+            }
         }
 
         return error.WindowsError;
     }
 
     fn parseVendorId(devid: []const u8) !u16 {
-        var it = std.mem.tokenize(u8, devid, "\\+");
+        var delimiter: ?[]const u8 = undefined;
 
-        while (it.next()) |segment| {
-            if (std.mem.startsWith(u8, segment, "VID_")) {
-                return try std.fmt.parseInt(u16, segment[4..], 16);
+        if (std.mem.startsWith(u8, devid, "USB")) {
+            delimiter = "\\&";
+        } else if (std.mem.startsWith(u8, devid, "FTDI")) {
+            delimiter = "\\+";
+        } else {
+            delimiter = null;
+        }
+
+        if (delimiter) |del| {
+            var it = std.mem.tokenize(u8, devid, del);
+
+            while (it.next()) |segment| {
+                if (std.mem.startsWith(u8, segment, "VID_")) {
+                    return try std.fmt.parseInt(u16, segment[4..], 16);
+                }
             }
         }
 
@@ -298,11 +329,23 @@ const WindowsInformationIterator = struct {
     }
 
     fn parseProductId(devid: []const u8) !u16 {
-        var it = std.mem.tokenize(u8, devid, "\\+");
+        var delimiter: ?[]const u8 = undefined;
 
-        while (it.next()) |segment| {
-            if (std.mem.startsWith(u8, segment, "PID_")) {
-                return try std.fmt.parseInt(u16, segment[4..], 16);
+        if (std.mem.startsWith(u8, devid, "USB")) {
+            delimiter = "\\&";
+        } else if (std.mem.startsWith(u8, devid, "FTDI")) {
+            delimiter = "\\+";
+        } else {
+            delimiter = null;
+        }
+
+        if (delimiter) |del| {
+            var it = std.mem.tokenize(u8, devid, del);
+
+            while (it.next()) |segment| {
+                if (std.mem.startsWith(u8, segment, "PID_")) {
+                    return try std.fmt.parseInt(u16, segment[4..], 16);
+                }
             }
         }
 
@@ -364,6 +407,17 @@ extern "setupapi" fn SetupDiGetDeviceInstanceIdA(
     deviceInstanceIdSize: std.os.windows.DWORD,
     requiredSize: ?*std.os.windows.DWORD,
 ) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+extern "cfgmgr32" fn CM_Get_Parent(
+    pdnDevInst: *DEVINST,
+    dnDevInst: DEVINST,
+    ulFlags: std.os.windows.ULONG,
+) callconv(std.os.windows.WINAPI) std.os.windows.DWORD;
+extern "cfgmgr32" fn CM_Get_Device_IDA(
+    dnDevInst: DEVINST,
+    buffer: std.os.windows.LPSTR,
+    bufferLen: std.os.windows.ULONG,
+    ulFlags: std.os.windows.ULONG,
+) callconv(std.os.windows.WINAPI) std.os.windows.DWORD;
 
 const LinuxPortIterator = struct {
     const Self = @This();
