@@ -270,13 +270,15 @@ const WindowsInformationIterator = struct {
         var delimiter: ?[]const u8 = undefined;
         var slice: []const u8 = undefined;
 
-        // TODO: test if this works for anything other than FTDI or using MS CDC driver
         if (std.mem.startsWith(u8, devid, "USB")) {
             delimiter = "\\&";
 
             var parent_id: DEVINST = undefined;
             var local_buffer: [256:0]u8 = std.mem.zeroes([256:0]u8);
 
+            // It appears other approaches recursively scan through parent-child IDs to
+            // find a serial number. This may need further investigation to understand
+            // when/if this is required.
             if (CM_Get_Parent(&parent_id, devinst, 0) != 0) return error.WindowsError;
             if (CM_Get_Device_IDA(parent_id, @ptrCast(&local_buffer), 256, 0) != 0) return error.WindowsError;
 
