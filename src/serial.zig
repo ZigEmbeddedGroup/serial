@@ -36,6 +36,9 @@ pub const PortInformation = struct {
     description: []const u8,
     manufacturer: []const u8,
     serial_number: []const u8,
+    // TODO: review whether to remove `hw_id`.
+    // Is this useless/being used in a Windows-only way?
+    hw_id: []const u8,
     vid: u16,
     pid: u16,
 };
@@ -172,6 +175,7 @@ const WindowsInformationIterator = struct {
         defer self.index += 1;
 
         var info: PortInformation = std.mem.zeroes(PortInformation);
+        @memset(&self.hw_id, 0);
 
         // NOTE: have not handled if port startswith("LPT")
         var length = getPortName(&self.device_info_set, &device_info_data, &self.port_buffer);
@@ -192,10 +196,16 @@ const WindowsInformationIterator = struct {
             self.device_info_set,
             &device_info_data,
             @ptrCast(&self.hw_id),
-            256,
+            255,
             null,
         ) == std.os.windows.TRUE) {
-            length = parseSerialNumber(device_info_data.devInst, &self.hw_id, &self.serial_buffer) catch 0;
+            length = @as(u32, @truncate(std.mem.indexOfSentinel(u8, 0, &self.hw_id)));
+            info.hw_id = self.hw_id[0..length];
+
+            length = parseSerialNumber(&self.hw_id, &self.serial_buffer) catch 0;
+            if (length == 0) {
+                length = getParentSerialNumber(device_info_data.devInst, &self.hw_id, &self.serial_buffer) catch 0;
+            }
             info.serial_number = self.serial_buffer[0..length];
             info.vid = parseVendorId(&self.hw_id) catch 0;
             info.pid = parseProductId(&self.hw_id) catch 0;
@@ -219,8 +229,6 @@ const WindowsInformationIterator = struct {
         defer {
             _ = std.os.windows.advapi32.RegCloseKey(hkey);
         }
-
-        // if (hkey == std.os.windows.INVALID_HANDLE_VALUE)  return error.std.os.Windows;
 
         inline for (.{ "PortName", "PortNumber" }) |key_token| {
             var port_length: std.os.windows.DWORD = std.os.windows.NAME_MAX;
@@ -266,38 +274,62 @@ const WindowsInformationIterator = struct {
         return bytes_required;
     }
 
-    fn parseSerialNumber(devinst: DEVINST, devid: []const u8, serial_number: [*]u8) !std.os.windows.DWORD {
+    fn getParentSerialNumber(devinst: DEVINST, devid: []const u8, serial_number: [*]u8) !std.os.windows.DWORD {
+        if (std.mem.startsWith(u8, devid, "FTDI")) {
+            // Should not be called on "FTDI" so just return the serial number.
+            return try parseSerialNumber(devid, serial_number);
+        } else if (std.mem.startsWith(u8, devid, "USB")) {
+            // taken from pyserial
+            const max_usb_device_tree_traversal_depth = 5;
+            const start_vidpid = std.mem.indexOf(u8, devid, "VID") orelse return error.WindowsError;
+            const vidpid_slice = devid[start_vidpid .. start_vidpid + 17]; // "VIDxxxx&PIDxxxx"
+
+            // keep looping over parent device to extract serial number if it contains the target VID and PID.
+            var depth: u8 = 0;
+            var child_inst: DEVINST = devinst;
+            while (depth <= max_usb_device_tree_traversal_depth) : (depth += 1) {
+                var parent_id: DEVINST = undefined;
+                var local_buffer: [256:0]u8 = std.mem.zeroes([256:0]u8);
+
+                if (CM_Get_Parent(&parent_id, child_inst, 0) != 0) return error.WindowsError;
+                if (CM_Get_Device_IDA(parent_id, @ptrCast(&local_buffer), 256, 0) != 0) return error.WindowsError;
+                defer child_inst = parent_id;
+
+                if (!std.mem.containsAtLeast(u8, local_buffer[0..255], 1, vidpid_slice)) continue;
+
+                const length = try parseSerialNumber(local_buffer[0..255], serial_number);
+                if (length > 0) return length;
+            }
+        }
+
+        return error.WindowsError;
+    }
+
+    fn parseSerialNumber(devid: []const u8, serial_number: [*]u8) !std.os.windows.DWORD {
         var delimiter: ?[]const u8 = undefined;
-        var slice: []const u8 = undefined;
 
         if (std.mem.startsWith(u8, devid, "USB")) {
             delimiter = "\\&";
-
-            var parent_id: DEVINST = undefined;
-            var local_buffer: [256:0]u8 = std.mem.zeroes([256:0]u8);
-
-            // It appears other approaches recursively scan through parent-child IDs to
-            // find a serial number. This may need further investigation to understand
-            // when/if this is required.
-            if (CM_Get_Parent(&parent_id, devinst, 0) != 0) return error.WindowsError;
-            if (CM_Get_Device_IDA(parent_id, @ptrCast(&local_buffer), 256, 0) != 0) return error.WindowsError;
-
-            slice = local_buffer[0..256];
         } else if (std.mem.startsWith(u8, devid, "FTDI")) {
             delimiter = "\\+";
-            slice = devid;
         } else {
+            // What to do here?
             delimiter = null;
         }
 
         if (delimiter) |del| {
-            var it = std.mem.tokenize(u8, slice, del);
+            var it = std.mem.tokenize(u8, devid, del);
 
             // throw away the start
             _ = it.next();
             while (it.next()) |segment| {
                 if (std.mem.startsWith(u8, segment, "VID_")) continue;
                 if (std.mem.startsWith(u8, segment, "PID_")) continue;
+
+                // If "MI_{d}{d}", this is an interface number. The serial number will have to be
+                // sourced from the parent node. Probably do not have to check all these conditions.
+                if (segment.len == 5 and std.mem.eql(u8, "MI_", segment[0..3]) and std.ascii.isDigit(segment[3]) and std.ascii.isDigit(segment[4])) return 0;
+
                 @memcpy(serial_number, segment);
                 return @as(std.os.windows.DWORD, @truncate(segment.len));
             }
