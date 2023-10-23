@@ -25,4 +25,17 @@ pub fn build(b: *std.build.Builder) void {
     });
     list_exe.addModule("serial", serial_mod);
     b.installArtifact(list_exe);
+
+    // TODO: Linux and MacOS port info support
+    const os_tag = list_exe.target_info.target.os.tag;
+    if (os_tag == .windows) {
+        const port_info_exe = b.addExecutable(.{
+            .name = "serial-list-info",
+            .root_source_file = .{ .path = "examples/list_port_info.zig" },
+            .target = target,
+            .optimize = optimize,
+        });
+        port_info_exe.addModule("serial", serial_mod);
+        b.installArtifact(port_info_exe);
+    }
 }
