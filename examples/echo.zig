@@ -24,7 +24,7 @@ pub fn main() !u8 {
     try serial.writer().writeAll("Hello, World!\r\n");
 
     while (true) {
-        var b = try serial.reader().readByte();
+        const b = try serial.reader().readByte();
         try serial.writer().writeByte(b);
     }
 
