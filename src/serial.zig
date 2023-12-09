@@ -460,14 +460,14 @@ const LinuxPortIterator = struct {
 
     // ls -hal /sys/class/tty/*/device/driver
 
-    dir: std.fs.IterableDir,
-    iterator: std.fs.IterableDir.Iterator,
+    dir: std.fs.Dir,
+    iterator: std.fs.Dir.Iterator,
 
     full_path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined,
     driver_path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined,
 
     pub fn init() !Self {
-        var dir = try std.fs.cwd().openIterableDir(root_dir, .{});
+        var dir = try std.fs.cwd().openDir(root_dir, .{ .iterate = true });
         errdefer dir.close();
 
         return Self{
@@ -485,7 +485,7 @@ const LinuxPortIterator = struct {
         while (true) {
             if (try self.iterator.next()) |entry| {
                 // not a dir => we don't care
-                var tty_dir = self.dir.dir.openDir(entry.name, .{}) catch continue;
+                var tty_dir = self.dir.openDir(entry.name, .{}) catch continue;
                 defer tty_dir.close();
 
                 // we need the device dir
@@ -524,14 +524,14 @@ const DarwinPortIterator = struct {
 
     const root_dir = "/dev/";
 
-    dir: std.fs.IterableDir,
-    iterator: std.fs.IterableDir.Iterator,
+    dir: std.fs.Dir,
+    iterator: std.fs.Dir.Iterator,
 
     full_path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined,
     driver_path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined,
 
     pub fn init() !Self {
-        var dir = try std.fs.cwd().openIterableDir(root_dir, .{});
+        var dir = try std.fs.cwd().openDir(root_dir, .{ .iterate = true });
         errdefer dir.close();
 
         return Self{
@@ -1042,7 +1042,7 @@ test "iterate ports" {
 }
 
 test "basic configuration test" {
-    var cfg = SerialConfig{
+    const cfg = SerialConfig{
         .handshake = .none,
         .baud_rate = 115200,
         .parity = .none,
