@@ -234,12 +234,12 @@ const WindowsInformationIterator = struct {
             var port_length: std.os.windows.DWORD = std.os.windows.NAME_MAX;
             var data_type: std.os.windows.DWORD = 0;
 
-            const result = std.os.windows.advapi32.RegQueryValueExW(
+            const result = RegQueryValueExA(
                 hkey,
-                std.unicode.utf8ToUtf16LeStringLiteral(key_token),
+                @as(std.os.windows.LPSTR, @ptrCast(@constCast(key_token))),
                 null,
                 &data_type,
-                @as(?*std.os.windows.BYTE, @ptrCast(port_name)),
+                @as(*std.os.windows.BYTE, @ptrCast(port_name)),
                 &port_length,
             );
 
@@ -404,6 +404,14 @@ extern "advapi32" fn RegEnumValueA(
     lpType: ?*std.os.windows.DWORD,
     lpData: [*]std.os.windows.BYTE,
     lpcbData: *std.os.windows.DWORD,
+) callconv(std.os.windows.WINAPI) std.os.windows.LSTATUS;
+extern "advapi32" fn RegQueryValueExA(
+    hKey: HKEY,
+    lpValueName: std.os.windows.LPSTR,
+    lpReserved: ?*std.os.windows.DWORD,
+    lpType: ?*std.os.windows.DWORD,
+    lpData: ?*std.os.windows.BYTE,
+    lpcbData: ?*std.os.windows.DWORD,
 ) callconv(std.os.windows.WINAPI) std.os.windows.LSTATUS;
 extern "setupapi" fn SetupDiGetClassDevsW(
     classGuid: ?*const std.os.windows.GUID,
