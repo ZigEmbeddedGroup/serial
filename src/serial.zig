@@ -239,7 +239,7 @@ const WindowsInformationIterator = struct {
                 @as(std.os.windows.LPSTR, @ptrCast(@constCast(key_token))),
                 null,
                 &data_type,
-                @as(*std.os.windows.BYTE, @ptrCast(port_name)),
+                port_name,
                 &port_length,
             );
 
@@ -256,12 +256,12 @@ const WindowsInformationIterator = struct {
         var data_type: std.os.windows.DWORD = 0;
         var bytes_required: std.os.windows.DWORD = std.os.windows.MAX_PATH;
 
-        const result = SetupDiGetDeviceRegistryPropertyW(
+        const result = SetupDiGetDeviceRegistryPropertyA(
             device_info_set.*,
             device_info_data,
             @intFromEnum(property),
             &data_type,
-            @as(?*std.os.windows.BYTE, @ptrCast(property_str)),
+            property_str,
             std.os.windows.NAME_MAX,
             &bytes_required,
         );
@@ -410,7 +410,7 @@ extern "advapi32" fn RegQueryValueExA(
     lpValueName: std.os.windows.LPSTR,
     lpReserved: ?*std.os.windows.DWORD,
     lpType: ?*std.os.windows.DWORD,
-    lpData: ?*std.os.windows.BYTE,
+    lpData: ?[*]std.os.windows.BYTE,
     lpcbData: ?*std.os.windows.DWORD,
 ) callconv(std.os.windows.WINAPI) std.os.windows.LSTATUS;
 extern "setupapi" fn SetupDiGetClassDevsW(
@@ -433,12 +433,12 @@ extern "setupapi" fn SetupDiOpenDevRegKey(
     keyType: std.os.windows.DWORD,
     samDesired: std.os.windows.REGSAM,
 ) callconv(std.os.windows.WINAPI) HKEY;
-extern "setupapi" fn SetupDiGetDeviceRegistryPropertyW(
+extern "setupapi" fn SetupDiGetDeviceRegistryPropertyA(
     hDevInfo: HDEVINFO,
     pSpDevInfoData: *SP_DEVINFO_DATA,
     property: std.os.windows.DWORD,
     propertyRegDataType: ?*std.os.windows.DWORD,
-    propertyBuffer: ?*std.os.windows.BYTE,
+    propertyBuffer: ?[*]std.os.windows.BYTE,
     propertyBufferSize: std.os.windows.DWORD,
     requiredSize: ?*std.os.windows.DWORD,
 ) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
