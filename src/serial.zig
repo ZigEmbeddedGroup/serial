@@ -580,24 +580,24 @@ const DarwinPortIterator = struct {
     }
 };
 
-pub const Parity = enum {
+pub const Parity = enum(u8) {
     /// No parity bit is used
-    none,
+    none = 0,
     /// Parity bit is `0` when an even number of bits is set in the data.
-    even,
+    even = 2,
     /// Parity bit is `0` when an odd number of bits is set in the data.
-    odd,
+    odd = 1,
     /// Parity bit is always `1`
-    mark,
+    mark = 3,
     /// Parity bit is always `0`
-    space,
+    space = 4,
 };
 
-pub const StopBits = enum {
+pub const StopBits = enum(u8) {
     /// The length of the stop bit is 1 bit
-    one,
+    one = 0,
     /// The length of the stop bit is 2 bits
-    two,
+    two = 2,
 };
 
 pub const Handshake = enum {
@@ -607,6 +607,13 @@ pub const Handshake = enum {
     software,
     /// Hardware handshake with RTS/CTS is used.
     hardware,
+};
+
+pub const WordSize = enum(u8) {
+    five = 5,
+    six = 6,
+    seven = 7,
+    eight = 8,
 };
 
 pub const SerialConfig = struct {
@@ -622,7 +629,7 @@ pub const SerialConfig = struct {
 
     /// Number of data bits per word.
     /// Allowed values are 5, 6, 7, 8
-    word_size: u4 = 8,
+    word_size: WordSize = .eight,
 
     /// Defines the handshake protocol used.
     handshake: Handshake = .none,
@@ -672,18 +679,9 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             dcb.flags = flags.toNumeric();
 
             dcb.wReserved = 0;
-            dcb.ByteSize = config.word_size;
-            dcb.Parity = switch (config.parity) {
-                .none => @as(u8, 0),
-                .even => @as(u8, 2),
-                .odd => @as(u8, 1),
-                .mark => @as(u8, 3),
-                .space => @as(u8, 4),
-            };
-            dcb.StopBits = switch (config.stop_bits) {
-                .one => @as(u2, 0),
-                .two => @as(u2, 2),
-            };
+            dcb.ByteSize = @intFromEnum(config.word_size);
+            dcb.Parity = @intFromEnum(config.parity);
+            dcb.StopBits = @intFromEnum(config.stop_bits);
             dcb.XonChar = 0x11;
             dcb.XoffChar = 0x13;
             dcb.wReserved1 = 0;
@@ -731,11 +729,10 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             }
 
             switch (config.word_size) {
-                5 => settings.cflag |= os.CS5,
-                6 => settings.cflag |= os.CS6,
-                7 => settings.cflag |= os.CS7,
-                8 => settings.cflag |= os.CS8,
-                else => return error.UnsupportedWordSize,
+                .five => settings.cflag |= os.CS5,
+                .six => settings.cflag |= os.CS6,
+                .seven => settings.cflag |= os.CS7,
+                .eight => settings.cflag |= os.CS8,
             }
 
             const baudmask = switch (tag) {
@@ -1050,11 +1047,11 @@ test "iterate ports" {
 }
 
 test "basic configuration test" {
-    var cfg = SerialConfig{
+    const cfg = SerialConfig{
         .handshake = .none,
         .baud_rate = 115200,
         .parity = .none,
-        .word_size = 8,
+        .word_size = .eight,
         .stop_bits = .one,
     };
 
