@@ -580,24 +580,24 @@ const DarwinPortIterator = struct {
     }
 };
 
-pub const Parity = enum(u8) {
+pub const Parity = enum {
     /// No parity bit is used
-    none = 0,
+    none,
     /// Parity bit is `0` when an even number of bits is set in the data.
-    even = 2,
+    even,
     /// Parity bit is `0` when an odd number of bits is set in the data.
-    odd = 1,
+    odd,
     /// Parity bit is always `1`
-    mark = 3,
+    mark,
     /// Parity bit is always `0`
-    space = 4,
+    space,
 };
 
-pub const StopBits = enum(u8) {
+pub const StopBits = enum {
     /// The length of the stop bit is 1 bit
-    one = 0,
+    one,
     /// The length of the stop bit is 2 bits
-    two = 2,
+    two,
 };
 
 pub const Handshake = enum {
@@ -609,11 +609,11 @@ pub const Handshake = enum {
     hardware,
 };
 
-pub const WordSize = enum(u8) {
-    five = 5,
-    six = 6,
-    seven = 7,
-    eight = 8,
+pub const WordSize = enum {
+    five,
+    six,
+    seven,
+    eight,
 };
 
 pub const SerialConfig = struct {
@@ -679,9 +679,23 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             dcb.flags = flags.toNumeric();
 
             dcb.wReserved = 0;
-            dcb.ByteSize = @intFromEnum(config.word_size);
-            dcb.Parity = @intFromEnum(config.parity);
-            dcb.StopBits = @intFromEnum(config.stop_bits);
+            dcb.ByteSize = switch (config.word_size) {
+                .five => @as(u8, 5),
+                .six => @as(u8, 6),
+                .seven => @as(u8, 7),
+                .eight => @as(u8, 8),
+            };
+            dcb.Parity = switch (config.parity) {
+                .none => @as(u8, 0),
+                .even => @as(u8, 2),
+                .odd => @as(u8, 1),
+                .mark => @as(u8, 3),
+                .space => @as(u8, 4),
+            };
+            dcb.StopBits = switch (config.stop_bits) {
+                .one => @as(u2, 0),
+                .two => @as(u2, 2),
+            };
             dcb.XonChar = 0x11;
             dcb.XoffChar = 0x13;
             dcb.wReserved1 = 0;
@@ -1047,7 +1061,7 @@ test "iterate ports" {
 }
 
 test "basic configuration test" {
-    const cfg = SerialConfig{
+    var cfg = SerialConfig{
         .handshake = .none,
         .baud_rate = 115200,
         .parity = .none,
