@@ -609,6 +609,13 @@ pub const Handshake = enum {
     hardware,
 };
 
+pub const WordSize = enum {
+    five,
+    six,
+    seven,
+    eight,
+};
+
 pub const SerialConfig = struct {
     /// Symbol rate in bits/second. Not that these
     /// include also parity and stop bits.
@@ -622,7 +629,7 @@ pub const SerialConfig = struct {
 
     /// Number of data bits per word.
     /// Allowed values are 5, 6, 7, 8
-    word_size: u4 = 8,
+    word_size: WordSize = .eight,
 
     /// Defines the handshake protocol used.
     handshake: Handshake = .none,
@@ -672,7 +679,12 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             dcb.flags = flags.toNumeric();
 
             dcb.wReserved = 0;
-            dcb.ByteSize = config.word_size;
+            dcb.ByteSize = switch (config.word_size) {
+                .five => @as(u8, 5),
+                .six => @as(u8, 6),
+                .seven => @as(u8, 7),
+                .eight => @as(u8, 8),
+            };
             dcb.Parity = switch (config.parity) {
                 .none => @as(u8, 0),
                 .even => @as(u8, 2),
@@ -731,11 +743,10 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             }
 
             switch (config.word_size) {
-                5 => settings.cflag |= os.CS5,
-                6 => settings.cflag |= os.CS6,
-                7 => settings.cflag |= os.CS7,
-                8 => settings.cflag |= os.CS8,
-                else => return error.UnsupportedWordSize,
+                .five => settings.cflag |= os.CS5,
+                .six => settings.cflag |= os.CS6,
+                .seven => settings.cflag |= os.CS7,
+                .eight => settings.cflag |= os.CS8,
             }
 
             const baudmask = switch (tag) {
@@ -1054,7 +1065,7 @@ test "basic configuration test" {
         .handshake = .none,
         .baud_rate = 115200,
         .parity = .none,
-        .word_size = 8,
+        .word_size = .eight,
         .stop_bits = .one,
     };
 
