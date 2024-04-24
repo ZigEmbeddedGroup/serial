@@ -1,11 +1,11 @@
 const std = @import("std");
 
-pub fn build(b: *std.build.Builder) void {
+pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
 
     const serial_mod = b.addModule("serial", .{
-        .source_file = .{ .path = "src/serial.zig" },
+        .root_source_file = .{ .path = "src/serial.zig" },
     });
 
     const echo_exe = b.addExecutable(.{
@@ -14,7 +14,7 @@ pub fn build(b: *std.build.Builder) void {
         .target = target,
         .optimize = optimize,
     });
-    echo_exe.addModule("serial", serial_mod);
+    echo_exe.root_module.addImport("serial", serial_mod);
     b.installArtifact(echo_exe);
 
     const list_exe = b.addExecutable(.{
@@ -23,11 +23,11 @@ pub fn build(b: *std.build.Builder) void {
         .target = target,
         .optimize = optimize,
     });
-    list_exe.addModule("serial", serial_mod);
+    list_exe.root_module.addImport("serial", serial_mod);
     b.installArtifact(list_exe);
 
     // TODO: Linux and MacOS port info support
-    const os_tag = list_exe.target_info.target.os.tag;
+    const os_tag = list_exe.rootModuleTarget().os.tag;
     if (os_tag == .windows) {
         const port_info_exe = b.addExecutable(.{
             .name = "serial-list-info",
@@ -35,7 +35,7 @@ pub fn build(b: *std.build.Builder) void {
             .target = target,
             .optimize = optimize,
         });
-        port_info_exe.addModule("serial", serial_mod);
+        port_info_exe.root_module.addImport("serial", serial_mod);
         b.installArtifact(port_info_exe);
     }
 }

@@ -468,14 +468,14 @@ const LinuxPortIterator = struct {
 
     // ls -hal /sys/class/tty/*/device/driver
 
-    dir: std.fs.IterableDir,
-    iterator: std.fs.IterableDir.Iterator,
+    dir: std.fs.Dir,
+    iterator: std.fs.Dir.Iterator,
 
     full_path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined,
     driver_path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined,
 
     pub fn init() !Self {
-        var dir = try std.fs.cwd().openIterableDir(root_dir, .{});
+        var dir = try std.fs.cwd().openDir(root_dir, .{ .iterate = true });
         errdefer dir.close();
 
         return Self{
@@ -493,7 +493,7 @@ const LinuxPortIterator = struct {
         while (true) {
             if (try self.iterator.next()) |entry| {
                 // not a dir => we don't care
-                var tty_dir = self.dir.dir.openDir(entry.name, .{}) catch continue;
+                var tty_dir = self.dir.openDir(entry.name, .{}) catch continue;
                 defer tty_dir.close();
 
                 // we need the device dir
@@ -704,49 +704,51 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
                 return error.WindowsError;
         },
         .linux, .macos => |tag| {
-            var settings = try std.os.tcgetattr(port.handle);
+            var settings = try std.posix.tcgetattr(port.handle);
 
-            const os = switch (tag) {
-                .macos => std.os.darwin,
-                .linux => std.os.linux,
-                else => unreachable,
-            };
-
-            settings.iflag = 0;
-            settings.oflag = 0;
-            settings.cflag = os.CREAD;
-            settings.lflag = 0;
-            settings.ispeed = 0;
-            settings.ospeed = 0;
+            settings.iflag = .{};
+            settings.oflag = .{};
+            settings.cflag = .{ .CREAD = true };
+            settings.lflag = .{};
+            settings.ispeed = .B0;
+            settings.ospeed = .B0;
 
             switch (config.parity) {
                 .none => {},
-                .odd => settings.cflag |= os.PARODD,
+                .odd => settings.cflag.PARODD = true,
                 .even => {}, // even parity is default when parity is enabled
-                .mark => settings.cflag |= os.PARODD | CMSPAR,
-                .space => settings.cflag |= CMSPAR,
+                .mark => {
+                    settings.cflag.PARODD = true;
+                    // settings.cflag.CMSPAR = true;
+                    settings.cflag._ |= (1 << 14);
+                },
+                .space => settings.cflag._ |= 1,
             }
             if (config.parity != .none) {
-                settings.iflag |= os.INPCK; // enable parity checking
-                settings.cflag |= os.PARENB; // enable parity generation
+                settings.iflag.INPCK = true; // enable parity checking
+                settings.cflag.PARENB = true; // enable parity generation
             }
 
             switch (config.handshake) {
-                .none => settings.cflag |= os.CLOCAL,
-                .software => settings.iflag |= os.IXON | os.IXOFF,
-                .hardware => settings.cflag |= CRTSCTS,
+                .none => settings.cflag.CLOCAL = true,
+                .software => {
+                    settings.iflag.IXON = true;
+                    settings.iflag.IXOFF = true;
+                },
+                // .hardware => settings.cflag.CRTSCTS = true,
+                .hardware => settings.cflag._ |= 1 << 15,
             }
 
             switch (config.stop_bits) {
                 .one => {},
-                .two => settings.cflag |= os.CSTOPB,
+                .two => settings.cflag.CSTOPB = true,
             }
 
             switch (config.word_size) {
-                .five => settings.cflag |= os.CS5,
-                .six => settings.cflag |= os.CS6,
-                .seven => settings.cflag |= os.CS7,
-                .eight => settings.cflag |= os.CS8,
+                .five => settings.cflag.CSIZE = .CS5,
+                .six => settings.cflag.CSIZE = .CS6,
+                .seven => settings.cflag.CSIZE = .CS7,
+                .eight => settings.cflag.CSIZE = .CS8,
             }
 
             const baudmask = switch (tag) {
@@ -755,8 +757,8 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
                 else => unreachable,
             };
 
-            settings.cflag &= ~@as(os.tcflag_t, CBAUD);
-            settings.cflag |= baudmask;
+            // settings.cflag &= ~@as(os.tcflag_t, CBAUD);
+            // settings.cflag |= baudmask;
             settings.ispeed = baudmask;
             settings.ospeed = baudmask;
 
@@ -765,7 +767,7 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             settings.cc[VSTART] = 0x11; // XON
             settings.cc[VTIME] = 0;
 
-            try std.os.tcsetattr(port.handle, .NOW, settings);
+            try std.posix.tcsetattr(port.handle, .NOW, settings);
         },
         else => @compileError("unsupported OS, please implement!"),
     }
@@ -904,37 +906,37 @@ fn tcflush(fd: std.os.fd_t, mode: usize) !void {
 fn mapBaudToLinuxEnum(baudrate: usize) !std.os.linux.speed_t {
     return switch (baudrate) {
         // from termios.h
-        50 => std.os.linux.B50,
-        75 => std.os.linux.B75,
-        110 => std.os.linux.B110,
-        134 => std.os.linux.B134,
-        150 => std.os.linux.B150,
-        200 => std.os.linux.B200,
-        300 => std.os.linux.B300,
-        600 => std.os.linux.B600,
-        1200 => std.os.linux.B1200,
-        1800 => std.os.linux.B1800,
-        2400 => std.os.linux.B2400,
-        4800 => std.os.linux.B4800,
-        9600 => std.os.linux.B9600,
-        19200 => std.os.linux.B19200,
-        38400 => std.os.linux.B38400,
+        50 => .B50,
+        75 => .B75,
+        110 => .B110,
+        134 => .B134,
+        150 => .B150,
+        200 => .B200,
+        300 => .B300,
+        600 => .B600,
+        1200 => .B1200,
+        1800 => .B1800,
+        2400 => .B2400,
+        4800 => .B4800,
+        9600 => .B9600,
+        19200 => .B19200,
+        38400 => .B38400,
         // from termios-baud.h
-        57600 => std.os.linux.B57600,
-        115200 => std.os.linux.B115200,
-        230400 => std.os.linux.B230400,
-        460800 => std.os.linux.B460800,
-        500000 => std.os.linux.B500000,
-        576000 => std.os.linux.B576000,
-        921600 => std.os.linux.B921600,
-        1000000 => std.os.linux.B1000000,
-        1152000 => std.os.linux.B1152000,
-        1500000 => std.os.linux.B1500000,
-        2000000 => std.os.linux.B2000000,
-        2500000 => std.os.linux.B2500000,
-        3000000 => std.os.linux.B3000000,
-        3500000 => std.os.linux.B3500000,
-        4000000 => std.os.linux.B4000000,
+        57600 => .B57600,
+        115200 => .B115200,
+        230400 => .B230400,
+        460800 => .B460800,
+        500000 => .B500000,
+        576000 => .B576000,
+        921600 => .B921600,
+        1000000 => .B1000000,
+        1152000 => .B1152000,
+        1500000 => .B1500000,
+        2000000 => .B2000000,
+        2500000 => .B2500000,
+        3000000 => .B3000000,
+        3500000 => .B3500000,
+        4000000 => .B4000000,
         else => error.UnsupportedBaudRate,
     };
 }
@@ -942,28 +944,28 @@ fn mapBaudToLinuxEnum(baudrate: usize) !std.os.linux.speed_t {
 fn mapBaudToMacOSEnum(baudrate: usize) !std.os.darwin.speed_t {
     return switch (baudrate) {
         // from termios.h
-        50 => std.os.darwin.B50,
-        75 => std.os.darwin.B75,
-        110 => std.os.darwin.B110,
-        134 => std.os.darwin.B134,
-        150 => std.os.darwin.B150,
-        200 => std.os.darwin.B200,
-        300 => std.os.darwin.B300,
-        600 => std.os.darwin.B600,
-        1200 => std.os.darwin.B1200,
-        1800 => std.os.darwin.B1800,
-        2400 => std.os.darwin.B2400,
-        4800 => std.os.darwin.B4800,
-        9600 => std.os.darwin.B9600,
-        19200 => std.os.darwin.B19200,
-        38400 => std.os.darwin.B38400,
-        7200 => std.os.darwin.B7200,
-        14400 => std.os.darwin.B14400,
-        28800 => std.os.darwin.B28800,
-        57600 => std.os.darwin.B57600,
-        76800 => std.os.darwin.B76800,
-        115200 => std.os.darwin.B115200,
-        230400 => std.os.darwin.B230400,
+        50 => .B50,
+        75 => .B75,
+        110 => .B110,
+        134 => .B134,
+        150 => .B150,
+        200 => .B200,
+        300 => .B300,
+        600 => .B600,
+        1200 => .B1200,
+        1800 => .B1800,
+        2400 => .B2400,
+        4800 => .B4800,
+        9600 => .B9600,
+        19200 => .B19200,
+        38400 => .B38400,
+        7200 => .B7200,
+        14400 => .B14400,
+        28800 => .B28800,
+        57600 => .B57600,
+        76800 => .B76800,
+        115200 => .B115200,
+        230400 => .B230400,
         else => error.UnsupportedBaudRate,
     };
 }
@@ -1061,7 +1063,7 @@ test "iterate ports" {
 }
 
 test "basic configuration test" {
-    var cfg = SerialConfig{
+    const cfg = SerialConfig{
         .handshake = .none,
         .baud_rate = 115200,
         .parity = .none,

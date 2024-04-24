@@ -15,7 +15,7 @@ pub fn main() !u8 {
 
     try zig_serial.configureSerialPort(serial, zig_serial.SerialConfig{
         .baud_rate = 115200,
-        .word_size = 8,
+        .word_size = .eight,
         .parity = .none,
         .stop_bits = .one,
         .handshake = .none,
@@ -24,7 +24,7 @@ pub fn main() !u8 {
     try serial.writer().writeAll("Hello, World!\r\n");
 
     while (true) {
-        var b = try serial.reader().readByte();
+        const b = try serial.reader().readByte();
         try serial.writer().writeByte(b);
     }
 
