@@ -13,8 +13,8 @@ pub fn main() !u8 {
     };
     defer serial.close();
 
-    try zig_serial.configureSerialPort(serial, zig_serial.SerialConfig{
-        .baud_rate = 115200,
+    try zig_serial.configure(serial, .{
+        .baud_rate = .B115200,
         .word_size = .eight,
         .parity = .none,
         .stop_bits = .one,

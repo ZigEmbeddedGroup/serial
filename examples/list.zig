@@ -2,7 +2,7 @@ const std = @import("std");
 const zig_serial = @import("serial");
 
 pub fn main() !u8 {
-    var iterator = try zig_serial.list();
+    var iterator = try zig_serial.iterator();
     defer iterator.deinit();
 
     while (try iterator.next()) |port| {
