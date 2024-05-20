@@ -5,12 +5,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
 
     const serial_mod = b.addModule("serial", .{
-        .root_source_file = .{ .path = "src/serial.zig" },
+        .root_source_file = b.path("src/serial.zig"),
     });
 
     const echo_exe = b.addExecutable(.{
         .name = "serial-echo",
-        .root_source_file = .{ .path = "examples/echo.zig" },
+        .root_source_file = b.path("examples/echo.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
 
     const list_exe = b.addExecutable(.{
         .name = "serial-list",
-        .root_source_file = .{ .path = "examples/list.zig" },
+        .root_source_file = b.path("examples/list.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) void {
     if (os_tag == .windows) {
         const port_info_exe = b.addExecutable(.{
             .name = "serial-list-info",
-            .root_source_file = .{ .path = "examples/list_port_info.zig" },
+            .root_source_file = b.path("examples/list_port_info.zig"),
             .target = target,
             .optimize = optimize,
         });
