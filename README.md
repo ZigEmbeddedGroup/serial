@@ -17,15 +17,19 @@ Helper library for configuring and listing serial ports.
 ## Example
 
 ```zig
-// Serial ports are just files, \\.\COM1 for COM1 on windows:
-var serial = try std.fs.cwd().openFile("\\\\.\\COM1", .{ .mode = .read_write }) ;
-defer serial.close();
+const serial = @import("serial");
 
-try zig_serial.configureSerialPort(serial, zig_serial.SerialConfig{
-    .baud_rate = 19200,
-    .word_size = 8,
+var iterator = serial.iterator();
+
+var sp = serial.init("COM3", .{
+    .baud_rate = .B19200,
+    .word_size = .eight,
     .parity = .none,
     .stop_bits = .one,
     .handshake = .none,
 });
+defer sp.close();
+
+serial.flush(sp, .both);
+serial.changeControlPins(sp, .{ .rts = true, .dtr = false });
 ```
