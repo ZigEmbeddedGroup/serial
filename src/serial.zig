@@ -886,7 +886,7 @@ const TCOFLUSH = 1;
 const TCIOFLUSH = 2;
 const TCFLSH = 0x540B;
 
-fn tcflush(fd: std.os.fd_t, mode: usize) !void {
+fn tcflush(fd: std.os.linux.fd_t, mode: usize) !void {
     switch (builtin.os.tag) {
         .linux => {
             if (std.os.linux.syscall3(.ioctl, @as(usize, @bitCast(@as(isize, fd))), TCFLSH, mode) != 0)
@@ -1028,7 +1028,7 @@ const DCBFlags = struct {
 
 test "DCBFlags" {
     var rand: u32 = 0;
-    try std.os.getrandom(@as(*[4]u8, @ptrCast(&rand)));
+    _ = std.os.linux.getrandom(@as(*[4]u8, @ptrCast(&rand)), 4, 0);
     var flags = DCBFlags.fromNumeric(rand);
     try std.testing.expectEqual(rand, flags.toNumeric());
 }
