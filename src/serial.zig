@@ -471,8 +471,8 @@ const LinuxPortIterator = struct {
     dir: std.fs.Dir,
     iterator: std.fs.Dir.Iterator,
 
-    full_path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined,
-    driver_path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined,
+    full_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
+    driver_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
 
     pub fn init() !Self {
         var dir = try std.fs.cwd().openDir(root_dir, .{ .iterate = true });
@@ -535,8 +535,8 @@ const DarwinPortIterator = struct {
     dir: std.fs.IterableDir,
     iterator: std.fs.IterableDir.Iterator,
 
-    full_path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined,
-    driver_path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined,
+    full_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
+    driver_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
 
     pub fn init() !Self {
         var dir = try std.fs.cwd().openIterableDir(root_dir, .{});
