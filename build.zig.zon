@@ -1,0 +1,11 @@
+.{
+    .name = "serial",
+    .version = "0.0.1",
+    .paths = .{
+        "src", // all files in src directory
+        "README.md",
+        "LICENSE",
+        "build.zig",
+        "build.zig.zon",
+    },
+}
