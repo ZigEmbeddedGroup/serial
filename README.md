@@ -1,6 +1,6 @@
-# Zig Serial Port Helper
+# Zig Serial Port Library
 
-Helper library for configuring and listing serial ports.
+Library for configuring and listing serial ports.
 
 ## Features
 
@@ -10,14 +10,15 @@ Helper library for configuring and listing serial ports.
   - Stop Bits (one, two)
   - Handshake (none, hardware, software)
   - Byte Size (5, 6, 7, 8)
-- Flushing of the serial port receive buffers
-- Supports windows and linux with the API
-- Listing available serial ports
+- Flush serial port send/receive buffers
+- List available serial ports
+- API: supports Windows, Linux and Mac
 
 ## Example
 
 ```zig
-// Serial ports are just files, \\.\COM1 for COM1 on windows:
+// Port configuration.
+// Serial ports are just files, \\.\COM1 for COM1 on Windows:
 var serial = try std.fs.cwd().openFile("\\\\.\\COM1", .{ .mode = .read_write }) ;
 defer serial.close();
 
@@ -29,3 +30,26 @@ try zig_serial.configureSerialPort(serial, zig_serial.SerialConfig{
     .handshake = .none,
 });
 ```
+
+## Usage
+
+### Library integration
+
+Integrate the library in your project via the Zig package manager:
+
+- add `serial` to your `.zig.zon` file by providing the URL to the archive of a tag or specific commit of the library
+- to update the hash, run `zig fetch --save [URL/to/tag/or/commit.tar.gz]`
+
+### Running tests
+
+The `build.zig` file contains a test step that can be called with `zig build test`. Note that this requires a serial port to be available on the system;
+
+- Linux: `/dev/ttyUSB0`
+- Mac: `/dev/cu.usbmodem101`
+- Windows: `COM3`
+
+### Building the examples
+
+You can build the examples from the `./examples` directory by calling `zig build examples`. Binaries will be generated in `./zig-out/bin` by default.
+
+- Note that the `list_port_info` example currently only works on Windows

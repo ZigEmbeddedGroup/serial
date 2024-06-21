@@ -6,7 +6,7 @@ pub fn main() !u8 {
 
     var serial = std.fs.cwd().openFile(port_name, .{ .mode = .read_write }) catch |err| switch (err) {
         error.FileNotFound => {
-            try std.io.getStdOut().writer().print("The serial port {s} does not exist.\n", .{port_name});
+            std.debug.print("Invalid config: the serial port '{s}' does not exist.\n", .{port_name});
             return 1;
         },
         else => return err,
