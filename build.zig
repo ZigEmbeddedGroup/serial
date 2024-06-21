@@ -1,4 +1,11 @@
 const std = @import("std");
+const log = std.log.scoped(.serial_lib__build);
+
+const example_files = [_][]const u8{
+    "echo",
+    "list",
+    "list_port_info",
+};
 
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
@@ -17,34 +24,31 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
 
-    const echo_exe = b.addExecutable(.{
-        .name = "serial-echo",
-        .root_source_file = b.path("examples/echo.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    echo_exe.root_module.addImport("serial", serial_mod);
-    b.installArtifact(echo_exe);
+    const example_step = b.step("examples", "Build examples");
+    {
+        for (example_files) |example_name| {
+            const example = b.addExecutable(.{
+                .name = example_name,
+                .root_source_file = b.path(
+                    b.fmt("examples/{s}.zig", .{example_name}),
+                ),
+                .target = target,
+                .optimize = optimize,
+            });
 
-    const list_exe = b.addExecutable(.{
-        .name = "serial-list",
-        .root_source_file = b.path("examples/list.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    list_exe.root_module.addImport("serial", serial_mod);
-    b.installArtifact(list_exe);
+            // port info only works on Windows!
+            // TODO: Linux and MacOS port info support
+            if (std.mem.eql(u8, example_name, "list_port_info") and
+                example.rootModuleTarget().os.tag != .windows)
+            {
+                log.warn("skipping example 'list_port_info' - only supported on Windows", .{});
+                continue;
+            }
 
-    // TODO: Linux and MacOS port info support
-    const os_tag = list_exe.rootModuleTarget().os.tag;
-    if (os_tag == .windows) {
-        const port_info_exe = b.addExecutable(.{
-            .name = "serial-list-info",
-            .root_source_file = b.path("examples/list_port_info.zig"),
-            .target = target,
-            .optimize = optimize,
-        });
-        port_info_exe.root_module.addImport("serial", serial_mod);
-        b.installArtifact(port_info_exe);
+            example.root_module.addImport("serial", serial_mod);
+            const install_example = b.addInstallArtifact(example, .{});
+            example_step.dependOn(&example.step);
+            example_step.dependOn(&install_example.step);
+        }
     }
 }
