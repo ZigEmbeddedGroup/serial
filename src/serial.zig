@@ -667,7 +667,7 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             flags.fParity = if (config.parity != .none) @as(u1, 1) else @as(u1, 0);
             flags.fOutxCtsFlow = if (config.handshake == .hardware) @as(u1, 1) else @as(u1, 0);
             flags.fOutxDsrFlow = 0;
-            flags.fDtrControl = 0;
+            flags.fDtrControl = 1;
             flags.fDsrSensitivity = 0;
             flags.fTXContinueOnXoff = 0;
             flags.fOutX = if (config.handshake == .software) @as(u1, 1) else @as(u1, 0);
@@ -1033,6 +1033,9 @@ test "DCBFlags" {
     try std.testing.expectEqual(rand, flags.toNumeric());
 }
 
+/// Configuration for the serial port
+///
+/// Details: https://learn.microsoft.com/es-es/windows/win32/api/winbase/ns-winbase-dcb
 const DCB = extern struct {
     DCBlength: std.os.windows.DWORD,
     BaudRate: std.os.windows.DWORD,
