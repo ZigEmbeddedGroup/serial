@@ -657,26 +657,17 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             if (GetCommState(port.handle, &dcb) == 0)
                 return error.WindowsError;
 
-            var flags = DCBFlags.fromNumeric(dcb.flags);
-
             // std.log.err("{s} {s}", .{ dcb, flags });
 
             dcb.BaudRate = config.baud_rate;
 
-            flags.fBinary = 1;
-            flags.fParity = if (config.parity != .none) @as(u1, 1) else @as(u1, 0);
-            flags.fOutxCtsFlow = if (config.handshake == .hardware) @as(u1, 1) else @as(u1, 0);
-            flags.fOutxDsrFlow = 0;
-            flags.fDtrControl = 0;
-            flags.fDsrSensitivity = 0;
-            flags.fTXContinueOnXoff = 0;
-            flags.fOutX = if (config.handshake == .software) @as(u1, 1) else @as(u1, 0);
-            flags.fInX = if (config.handshake == .software) @as(u1, 1) else @as(u1, 0);
-            flags.fErrorChar = 0;
-            flags.fNull = 0;
-            flags.fRtsControl = if (config.handshake == .hardware) @as(u1, 1) else @as(u1, 0);
-            flags.fAbortOnError = 0;
-            dcb.flags = flags.toNumeric();
+            dcb.flags = @bitCast(DCBFlags{
+                .fParity = config.parity != .none,
+                .fOutxCtsFlow = config.handshake == .hardware,
+                .fOutX = config.handshake == .software,
+                .fInX = config.handshake == .software,
+                .fRtsControl = @as(u2, if (config.handshake == .hardware) 1 else 0),
+            });
 
             dcb.wReserved = 0;
             dcb.ByteSize = switch (config.word_size) {
@@ -970,69 +961,26 @@ fn mapBaudToMacOSEnum(baudrate: usize) !std.os.darwin.speed_t {
     };
 }
 
-const DCBFlags = struct {
-    fBinary: u1, // u1
-    fParity: u1, // u1
-    fOutxCtsFlow: u1, // u1
-    fOutxDsrFlow: u1, // u1
-    fDtrControl: u2, // u2
-    fDsrSensitivity: u1, // u1
-    fTXContinueOnXoff: u1, // u1
-    fOutX: u1, // u1
-    fInX: u1, // u1
-    fErrorChar: u1, // u1
-    fNull: u1, // u1
-    fRtsControl: u2, // u2
-    fAbortOnError: u1, // u1
+const DCBFlags = packed struct(u32) {
+    fBinary: bool = true, // u1
+    fParity: bool = false, // u1
+    fOutxCtsFlow: bool = false, // u1
+    fOutxDsrFlow: bool = false, // u1
+    fDtrControl: u2 = 1, // u2
+    fDsrSensitivity: bool = false, // u1
+    fTXContinueOnXoff: bool = false, // u1
+    fOutX: bool = false, // u1
+    fInX: bool = false, // u1
+    fErrorChar: bool = false, // u1
+    fNull: bool = false, // u1
+    fRtsControl: u2 = 0, // u2
+    fAbortOnError: bool = false, // u1
     fDummy2: u17 = 0, // u17
-
-    // TODO: Packed structs please
-    pub fn fromNumeric(value: u32) DCBFlags {
-        var flags: DCBFlags = undefined;
-        flags.fBinary = @as(u1, @truncate(value >> 0)); // u1
-        flags.fParity = @as(u1, @truncate(value >> 1)); // u1
-        flags.fOutxCtsFlow = @as(u1, @truncate(value >> 2)); // u1
-        flags.fOutxDsrFlow = @as(u1, @truncate(value >> 3)); // u1
-        flags.fDtrControl = @as(u2, @truncate(value >> 4)); // u2
-        flags.fDsrSensitivity = @as(u1, @truncate(value >> 6)); // u1
-        flags.fTXContinueOnXoff = @as(u1, @truncate(value >> 7)); // u1
-        flags.fOutX = @as(u1, @truncate(value >> 8)); // u1
-        flags.fInX = @as(u1, @truncate(value >> 9)); // u1
-        flags.fErrorChar = @as(u1, @truncate(value >> 10)); // u1
-        flags.fNull = @as(u1, @truncate(value >> 11)); // u1
-        flags.fRtsControl = @as(u2, @truncate(value >> 12)); // u2
-        flags.fAbortOnError = @as(u1, @truncate(value >> 14)); // u1
-        flags.fDummy2 = @as(u17, @truncate(value >> 15)); // u17
-        return flags;
-    }
-
-    pub fn toNumeric(self: DCBFlags) u32 {
-        var value: u32 = 0;
-        value += @as(u32, self.fBinary) << 0; // u1
-        value += @as(u32, self.fParity) << 1; // u1
-        value += @as(u32, self.fOutxCtsFlow) << 2; // u1
-        value += @as(u32, self.fOutxDsrFlow) << 3; // u1
-        value += @as(u32, self.fDtrControl) << 4; // u2
-        value += @as(u32, self.fDsrSensitivity) << 6; // u1
-        value += @as(u32, self.fTXContinueOnXoff) << 7; // u1
-        value += @as(u32, self.fOutX) << 8; // u1
-        value += @as(u32, self.fInX) << 9; // u1
-        value += @as(u32, self.fErrorChar) << 10; // u1
-        value += @as(u32, self.fNull) << 11; // u1
-        value += @as(u32, self.fRtsControl) << 12; // u2
-        value += @as(u32, self.fAbortOnError) << 14; // u1
-        value += @as(u32, self.fDummy2) << 15; // u17
-        return value;
-    }
 };
 
-test "DCBFlags" {
-    var rand: u32 = 0;
-    _ = std.os.linux.getrandom(@as(*[4]u8, @ptrCast(&rand)), 4, 0);
-    var flags = DCBFlags.fromNumeric(rand);
-    try std.testing.expectEqual(rand, flags.toNumeric());
-}
-
+/// Configuration for the serial port
+///
+/// Details: https://learn.microsoft.com/es-es/windows/win32/api/winbase/ns-winbase-dcb
 const DCB = extern struct {
     DCBlength: std.os.windows.DWORD,
     BaudRate: std.os.windows.DWORD,
