@@ -662,11 +662,11 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             dcb.BaudRate = config.baud_rate;
 
             dcb.flags = @bitCast(DCBFlags{
-                .fParity = if (config.parity != .none) @as(u1, 1) else @as(u1, 0),
-                .fOutxCtsFlow = if (config.handshake == .hardware) @as(u1, 1) else @as(u1, 0),
-                .fOutX = if (config.handshake == .software) @as(u1, 1) else @as(u1, 0),
-                .fInX = if (config.handshake == .software) @as(u1, 1) else @as(u1, 0),
-                .fRtsControl = if (config.handshake == .hardware) @as(u1, 1) else @as(u1, 0),
+                .fParity = config.parity != .none,
+                .fOutxCtsFlow = config.handshake == .hardware,
+                .fOutX = config.handshake == .software,
+                .fInX = config.handshake == .software,
+                .fRtsControl = @as(u2, if (config.handshake == .hardware) 1 else 0),
             });
 
             dcb.wReserved = 0;
@@ -962,19 +962,19 @@ fn mapBaudToMacOSEnum(baudrate: usize) !std.os.darwin.speed_t {
 }
 
 const DCBFlags = packed struct(u32) {
-    fBinary: u1 = 1, // u1
-    fParity: u1 = 0, // u1
-    fOutxCtsFlow: u1 = 0, // u1
-    fOutxDsrFlow: u1 = 0, // u1
+    fBinary: bool = true, // u1
+    fParity: bool = false, // u1
+    fOutxCtsFlow: bool = false, // u1
+    fOutxDsrFlow: bool = false, // u1
     fDtrControl: u2 = 1, // u2
-    fDsrSensitivity: u1 = 0, // u1
-    fTXContinueOnXoff: u1 = 0, // u1
-    fOutX: u1 = 0, // u1
-    fInX: u1 = 0, // u1
-    fErrorChar: u1 = 0, // u1
-    fNull: u1 = 0, // u1
+    fDsrSensitivity: bool = false, // u1
+    fTXContinueOnXoff: bool = false, // u1
+    fOutX: bool = false, // u1
+    fInX: bool = false, // u1
+    fErrorChar: bool = false, // u1
+    fNull: bool = false, // u1
     fRtsControl: u2 = 0, // u2
-    fAbortOnError: u1 = 0, // u1
+    fAbortOnError: bool = false, // u1
     fDummy2: u17 = 0, // u17
 };
 
