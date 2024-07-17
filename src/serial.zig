@@ -532,14 +532,14 @@ const DarwinPortIterator = struct {
 
     const root_dir = "/dev/";
 
-    dir: std.fs.IterableDir,
-    iterator: std.fs.IterableDir.Iterator,
+    dir: std.fs.Dir,
+    iterator: std.fs.Dir.Iterator,
 
     full_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
     driver_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
 
     pub fn init() !Self {
-        var dir = try std.fs.cwd().openIterableDir(root_dir, .{});
+        var dir = try std.fs.cwd().openDir(root_dir, .{ .iterate = true });
         errdefer dir.close();
 
         return Self{
