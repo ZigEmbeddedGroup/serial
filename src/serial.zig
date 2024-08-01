@@ -703,12 +703,13 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
                 else => unreachable,
             };
 
+            // initialize CFLAG with the baudrate bits
+            var strct_cflag: std.os.linux.tc_cflag_t = @bitCast(@intFromEnum(baudmask));
+            strct_cflag.CREAD = true; // 0x80
+
             settings.iflag = .{};
             settings.oflag = .{};
-            settings.cflag = .{
-                ._ = @as(u20, @truncate(@intFromEnum(baudmask))),
-                .CREAD = true,
-            };
+            settings.cflag = strct_cflag;
             settings.lflag = .{};
             settings.ispeed = .B0;
             settings.ospeed = .B0;
@@ -751,8 +752,6 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
                 .eight => settings.cflag.CSIZE = .CS8,
             }
 
-            // settings.cflag &= ~@as(os.tcflag_t, CBAUD);
-            // settings.cflag |= baudmask;
             settings.ispeed = baudmask;
             settings.ospeed = baudmask;
 
