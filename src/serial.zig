@@ -697,9 +697,18 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
         .linux, .macos => |tag| {
             var settings = try std.posix.tcgetattr(port.handle);
 
+            const baudmask = switch (tag) {
+                .macos => try mapBaudToMacOSEnum(config.baud_rate),
+                .linux => try mapBaudToLinuxEnum(config.baud_rate),
+                else => unreachable,
+            };
+
             settings.iflag = .{};
             settings.oflag = .{};
-            settings.cflag = .{ .CREAD = true };
+            settings.cflag = .{
+                ._ = @as(u20, @truncate(@intFromEnum(baudmask))),
+                .CREAD = true,
+            };
             settings.lflag = .{};
             settings.ispeed = .B0;
             settings.ospeed = .B0;
@@ -741,12 +750,6 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
                 .seven => settings.cflag.CSIZE = .CS7,
                 .eight => settings.cflag.CSIZE = .CS8,
             }
-
-            const baudmask = switch (tag) {
-                .macos => try mapBaudToMacOSEnum(config.baud_rate),
-                .linux => try mapBaudToLinuxEnum(config.baud_rate),
-                else => unreachable,
-            };
 
             // settings.cflag &= ~@as(os.tcflag_t, CBAUD);
             // settings.cflag |= baudmask;
