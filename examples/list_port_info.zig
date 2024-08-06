@@ -8,7 +8,7 @@ pub fn main() !u8 {
     // TODO: Linux and MacOS port info support
     if (builtin.os.tag != .windows) {
         log.err("'list_port_info' example is only supported on Windows", .{});
-        return 1;
+        std.process.exit(1);
     }
 
     var iterator = try zig_serial.list_info();
