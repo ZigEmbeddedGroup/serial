@@ -1,7 +1,16 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const zig_serial = @import("serial");
+const log = std.log.scoped(.serial_ex_portinfo);
 
 pub fn main() !u8 {
+
+    // TODO: Linux and MacOS port info support
+    if (builtin.os.tag != .windows) {
+        log.err("'list_port_info' example is only supported on Windows", .{});
+        std.process.exit(1);
+    }
+
     var iterator = try zig_serial.list_info();
     defer iterator.deinit();
 
