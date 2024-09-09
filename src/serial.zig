@@ -697,22 +697,24 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
         .linux, .macos => |tag| {
             var settings = try std.posix.tcgetattr(port.handle);
 
-            const baudmask = switch (tag) {
-                .macos => try mapBaudToMacOSEnum(config.baud_rate),
+            var macos_nonstandard_baud = false;
+            const baudmask: std.c.speed_t = switch (tag) {
+                .macos => mapBaudToMacOSEnum(config.baud_rate) orelse b: {
+                    macos_nonstandard_baud = true;
+                    break :b @enumFromInt(@as(u64, @bitCast(settings.cflag)));
+                },
                 .linux => try mapBaudToLinuxEnum(config.baud_rate),
                 else => unreachable,
             };
 
             // initialize CFLAG with the baudrate bits
-            var strct_cflag: std.os.linux.tc_cflag_t = @bitCast(@intFromEnum(baudmask));
+            var strct_cflag: std.c.tc_cflag_t = @bitCast(@intFromEnum(baudmask));
             strct_cflag.CREAD = true; // 0x80
 
             settings.iflag = .{};
             settings.oflag = .{};
             settings.cflag = strct_cflag;
             settings.lflag = .{};
-            settings.ispeed = .B0;
-            settings.ospeed = .B0;
 
             switch (config.parity) {
                 .none => {},
@@ -752,8 +754,10 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
                 .eight => settings.cflag.CSIZE = .CS8,
             }
 
-            settings.ispeed = baudmask;
-            settings.ospeed = baudmask;
+            if (!macos_nonstandard_baud) {
+                settings.ispeed = baudmask;
+                settings.ospeed = baudmask;
+            }
 
             settings.cc[VMIN] = 1;
             settings.cc[VSTOP] = 0x13; // XOFF
@@ -761,6 +765,15 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             settings.cc[VTIME] = 0;
 
             try std.posix.tcsetattr(port.handle, .NOW, settings);
+
+            if (builtin.os.tag == .macos and macos_nonstandard_baud) {
+                // macOS ioctl takes ulongs, but std.c.ioctl disagrees.
+                const IOSSIOSPEED: c_uint = 0x80085402;
+                const speed: c_uint = @intCast(config.baud_rate);
+                if (std.c.ioctl(port.handle, @bitCast(IOSSIOSPEED), &speed) == -1) {
+                    return error.UnsupportedBaudRate;
+                }
+            }
         },
         else => @compileError("unsupported OS, please implement!"),
     }
@@ -896,7 +909,7 @@ fn tcflush(fd: std.os.linux.fd_t, mode: usize) !void {
     }
 }
 
-fn mapBaudToLinuxEnum(baudrate: usize) !std.os.linux.speed_t {
+fn mapBaudToLinuxEnum(baudrate: usize) !std.c.speed_t {
     return switch (baudrate) {
         // from termios.h
         50 => .B50,
@@ -934,7 +947,7 @@ fn mapBaudToLinuxEnum(baudrate: usize) !std.os.linux.speed_t {
     };
 }
 
-fn mapBaudToMacOSEnum(baudrate: usize) !std.os.darwin.speed_t {
+fn mapBaudToMacOSEnum(baudrate: usize) ?std.c.speed_t {
     return switch (baudrate) {
         // from termios.h
         50 => .B50,
@@ -959,7 +972,7 @@ fn mapBaudToMacOSEnum(baudrate: usize) !std.os.darwin.speed_t {
         76800 => .B76800,
         115200 => .B115200,
         230400 => .B230400,
-        else => error.UnsupportedBaudRate,
+        else => null,
     };
 }
 
