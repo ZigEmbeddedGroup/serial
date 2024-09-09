@@ -766,7 +766,7 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
 
             try std.posix.tcsetattr(port.handle, .NOW, settings);
 
-            if (macos_nonstandard_baud) {
+            if (builtin.os.tag == .macos and macos_nonstandard_baud) {
                 // macOS ioctl takes ulongs, but std.c.ioctl disagrees.
                 const IOSSIOSPEED: c_uint = 0x80085402;
                 const speed: c_uint = @intCast(config.baud_rate);
