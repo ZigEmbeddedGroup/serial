@@ -36,14 +36,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
             });
 
-            // port info only works on Windows!
             // TODO: Linux and MacOS port info support
-            if (std.mem.eql(u8, example_name, "list_port_info") and
-                example.rootModuleTarget().os.tag != .windows)
-            {
-                log.warn("skipping example 'list_port_info' - only supported on Windows", .{});
-                continue;
-            }
 
             example.root_module.addImport("serial", serial_mod);
             const install_example = b.addInstallArtifact(example, .{});
