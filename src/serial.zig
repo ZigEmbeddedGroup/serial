@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const c = @cImport(@cInclude("termios.h"));
+const print = std.debug.print;
 
 pub fn list() !PortIterator {
     return try PortIterator.init();
@@ -19,7 +20,8 @@ pub const PortIterator = switch (builtin.os.tag) {
 
 pub const InformationIterator = switch (builtin.os.tag) {
     .windows => WindowsInformationIterator,
-    .linux, .macos => @panic("'Port Information' not yet implemented for this OS"),
+    .linux => LinuxInformationIterator,
+    // .linux, .macos => @panic("'Port Information' not yet implemented for this OS"),
     else => @compileError("OS is not supported for information iteration"),
 };
 
@@ -524,6 +526,121 @@ const LinuxPortIterator = struct {
             }
         }
         return null;
+    }
+};
+
+const LinuxInformationIterator = struct {
+    const Self = @This();
+
+    const root_dir = "/sys/class/tty";
+
+    index: u8,
+    dir: std.fs.Dir,
+    iterator: std.fs.Dir.Iterator,
+
+    driver_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
+    sys_buffer: [256:0]u8 = undefined,
+    desc_buffer: [256:0]u8 = undefined,
+    man_buffer: [256:0]u8 = undefined,
+    serial_buffer: [256:0]u8 = undefined,
+    port: PortInformation = undefined,
+
+    pub fn init()!Self{
+        var dir = try std.fs.cwd().openDir(root_dir, .{ .iterate = true });
+        errdefer dir.close();
+
+        return Self{
+            .index = 0,
+            .dir = dir,
+            .iterator = dir.iterate()
+        };
+    }
+
+    pub fn deinit(self: *Self) void{
+        self.dir.close();
+        self.* = undefined;
+    }
+
+    pub fn next(self: *Self) !?PortInformation{
+        self.index += 1;
+        while(true){
+            if(try self.iterator.next()) |entry| {
+                @memset(&self.sys_buffer, 0);
+                @memset(&self.desc_buffer, 0);
+                @memset(&self.man_buffer, 0);
+                @memset(&self.serial_buffer, 0);
+                @memset(&self.driver_path_buffer, 0);
+               
+                // not a dir => we don't care
+                var tty_dir = self.dir.openDir(entry.name, .{}) catch continue;
+                defer tty_dir.close();
+
+                // we need the device dir
+                // no device dir =>  virtual device
+                var device_dir = tty_dir.openDir("device", .{}) catch continue;
+                defer device_dir.close();
+
+                // We need the symlink for "driver"
+                const subsystem_path = device_dir.readLink("subsystem", &self.driver_path_buffer) catch continue;
+                const subsystem = std.fs.path.basename(subsystem_path);
+                var device_path: []u8 = undefined;
+                if(std.mem.eql(u8, subsystem, "usb") == true){
+                    device_path= try device_dir.realpath("../", &self.driver_path_buffer);
+                }
+                else if(std.mem.eql(u8, subsystem, "usb-serial") == true){
+                    device_path = try device_dir.realpath("../../", &self.driver_path_buffer);
+                }
+                //must be remove to manage other device type
+                else{
+                    continue;
+                }
+                var data_dir = std.fs.openDirAbsolute(device_path, .{}) catch continue;
+                defer data_dir.close();
+                var tmp: [4]u8 = undefined;
+                {
+                    self.port.manufacturer = data_dir.readFile("manufacturer", &self.man_buffer) catch continue;
+                    Self.clean_file_read(&self.man_buffer);
+                    self.port.description = data_dir.readFile("product", &self.desc_buffer) catch continue;
+                    Self.clean_file_read(&self.desc_buffer);
+                    self.port.serial_number = data_dir.readFile("serial", &self.serial_buffer) catch continue;
+                    Self.clean_file_read(&self.serial_buffer);
+                }
+                {
+                    @memset(&tmp, 0);
+                    _ = data_dir.readFile("idVendor", &tmp) catch continue;
+                    self.port.vid = try std.fmt.parseInt(u16, &tmp, 16);
+                }
+                {
+                    @memset(&tmp, 0);
+                    _ = data_dir.readFile("idProduct", &tmp) catch continue;
+                    self.port.pid = try std.fmt.parseInt(u16, &tmp, 16);
+                }
+                {
+                    var fba = std.heap.FixedBufferAllocator.init(&self.sys_buffer);
+                    self.port.system_location = try std.fs.path.join(fba.allocator(), &.{
+                        "/dev/",
+                        entry.name,
+                    });
+                }
+                self.port.friendly_name = entry.name;
+                self.port.hw_id = "N/A";
+
+                return self.port;
+            }
+            else {
+                return null;
+            }
+        }
+
+        return null;
+    }
+    fn clean_file_read(buf: []u8) void{
+        for (buf) |*item| {
+            if(item.* == '\n'){
+                item.* = 0;
+                break;
+            }
+        }
     }
 };
 
