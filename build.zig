@@ -37,7 +37,6 @@ pub fn build(b: *std.Build) void {
             });
 
             // TODO: Linux and MacOS port info support
-
             example.root_module.addImport("serial", serial_mod);
             const install_example = b.addInstallArtifact(example, .{});
             example_step.dependOn(&example.step);
