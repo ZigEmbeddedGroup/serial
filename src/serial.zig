@@ -578,6 +578,17 @@ const LinuxInformationIterator = struct {
             var device_dir = tty_dir.openDir("device", .{}) catch continue;
             defer device_dir.close();
 
+            // start filling port informations
+            {
+                var fba = std.heap.FixedBufferAllocator.init(&self.sys_buffer);
+                self.port.system_location = try std.fs.path.join(fba.allocator(), &.{
+                    "/dev/",
+                    entry.name,
+                });
+                self.port.friendly_name = entry.name;
+                self.port.port_name = entry.name;
+                self.port.hw_id = "N/A";
+            }
             // We need the symlink for "driver"
             const subsystem_path = device_dir.readLink("subsystem", &self.driver_path_buffer) catch continue;
             const subsystem = std.fs.path.basename(subsystem_path);
@@ -588,10 +599,16 @@ const LinuxInformationIterator = struct {
             else if(std.mem.eql(u8, subsystem, "usb-serial") == true){
                 device_path = try device_dir.realpath("../../", &self.driver_path_buffer);
             }
-            //must be remove to manage other device type
             else{
-                continue;
+                //must be remove to manage other device type
+                self.port.description = "Not Managed";
+                self.port.manufacturer = "Not Managed";
+                self.port.serial_number = "Not Managed";
+                self.port.vid = 0;
+                self.port.pid = 0;
+                return self.port;
             }
+
             var data_dir = std.fs.openDirAbsolute(device_path, .{}) catch continue;
             defer data_dir.close();
             var tmp: [4]u8 = undefined;
@@ -613,16 +630,6 @@ const LinuxInformationIterator = struct {
                 _ = data_dir.readFile("idProduct", &tmp) catch 0;
                 self.port.pid = try std.fmt.parseInt(u16, &tmp, 16);
             }
-            {
-                var fba = std.heap.FixedBufferAllocator.init(&self.sys_buffer);
-                self.port.system_location = try std.fs.path.join(fba.allocator(), &.{
-                    "/dev/",
-                    entry.name,
-                });
-            }
-            self.port.friendly_name = entry.name;
-            self.port.port_name = entry.name;
-            self.port.hw_id = "N/A";
 
             return self.port;
         }
