@@ -900,38 +900,43 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
 /// Flushes the serial port `port`. If `input` is set, all pending data in
 /// the receive buffer is flushed, if `output` is set all pending data in
 /// the send buffer is flushed.
-pub fn flushSerialPort(port: std.fs.File, input: bool, output: bool) !void {
-    if (!input and !output)
-        return;
 
+const Flush = enum {
+    input,
+    output,
+    both,
+};
+
+pub fn flushSerialPort(port: std.fs.File, flush: Flush) !void {
     switch (builtin.os.tag) {
         .windows => {
-            const success = if (input and output)
-                PurgeComm(port.handle, PURGE_TXCLEAR | PURGE_RXCLEAR)
-            else if (input)
-                PurgeComm(port.handle, PURGE_RXCLEAR)
-            else if (output)
-                PurgeComm(port.handle, PURGE_TXCLEAR)
-            else
-                @as(std.os.windows.BOOL, 0);
-            if (success == 0)
+            const mode: std.os.windows.DWORD = switch (flush) {
+                .input => PURGE_RXCLEAR,
+                .output => PURGE_TXCLEAR,
+                .both => PURGE_TXCLEAR | PURGE_RXCLEAR,
+            };
+            if (0 == PurgeComm(port.handle, mode))
                 return error.FlushError;
         },
-
-        .linux => if (input and output)
-            try tcflush(port.handle, TCIOFLUSH)
-        else if (input)
-            try tcflush(port.handle, TCIFLUSH)
-        else if (output)
-            try tcflush(port.handle, TCOFLUSH),
-
-        .macos => if (input and output)
-            try tcflush(port.handle, c.TCIOFLUSH)
-        else if (input)
-            try tcflush(port.handle, c.TCIFLUSH)
-        else if (output)
-            try tcflush(port.handle, c.TCOFLUSH),
-
+        .linux => {
+            const TCFLSH = 0x540B;
+            const mode: usize = switch (flush) {
+                .input => 0, // TCIFLUSH
+                .output => 1, // TCOFLUSH
+                .both => 2, // TCIOFLUSH
+            };
+            if (0 != std.os.linux.syscall3(.ioctl, @as(usize, @bitCast(@as(isize, port.handle))), TCFLSH, mode))
+                return error.FlushError;
+        },
+        .macos => {
+            const mode: c_int = switch (flush) {
+                .input => c.TCIFLUSH,
+                .output => c.TCOFLUSH,
+                .both => c.TCIOFLUSH,
+            };
+            if (0 != c.tcflush(port.handle, mode))
+                return error.FlushError;
+        },
         else => @compileError("unsupported OS, please implement!"),
     }
 }
@@ -1004,28 +1009,6 @@ const PURGE_TXCLEAR = 0x0004;
 
 extern "kernel32" fn PurgeComm(hFile: std.os.windows.HANDLE, dwFlags: std.os.windows.DWORD) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
 extern "kernel32" fn EscapeCommFunction(hFile: std.os.windows.HANDLE, dwFunc: std.os.windows.DWORD) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
-
-const TCIFLUSH = 0;
-const TCOFLUSH = 1;
-const TCIOFLUSH = 2;
-const TCFLSH = 0x540B;
-
-fn tcflush(fd: std.os.linux.fd_t, mode: usize) !void {
-    switch (builtin.os.tag) {
-        .linux => {
-            if (std.os.linux.syscall3(.ioctl, @as(usize, @bitCast(@as(isize, fd))), TCFLSH, mode) != 0)
-                return error.FlushError;
-        },
-        .macos => {
-            const err = c.tcflush(fd, @as(c_int, @intCast(mode)));
-            if (err != 0) {
-                std.debug.print("tcflush failed: {d}\r\n", .{err});
-                return error.FlushError;
-            }
-        },
-        else => @compileError("unsupported OS, please implement!"),
-    }
-}
 
 fn mapBaudToLinuxEnum(baudrate: usize) !std.c.speed_t {
     return switch (baudrate) {
@@ -1179,10 +1162,9 @@ test "basic flush test" {
     var port = try std.fs.cwd().openFile(tty, .{ .mode = .read_write });
     defer port.close();
 
-    try flushSerialPort(port, true, true);
-    try flushSerialPort(port, true, false);
-    try flushSerialPort(port, false, true);
-    try flushSerialPort(port, false, false);
+    try flushSerialPort(port, .both);
+    try flushSerialPort(port, .input);
+    try flushSerialPort(port, .output);
 }
 
 test "change control pins" {
