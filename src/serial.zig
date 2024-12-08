@@ -897,16 +897,15 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
     }
 }
 
-/// Flushes the serial port `port`. If `input` is set, all pending data in
-/// the receive buffer is flushed, if `output` is set all pending data in
-/// the send buffer is flushed.
-
 const Flush = enum {
     input,
     output,
     both,
 };
 
+/// Flushes the serial port `port`. If `input` is set, all pending data in
+/// the receive buffer is flushed, if `output` is set all pending data in
+/// the send buffer is flushed.
 pub fn flushSerialPort(port: std.fs.File, flush: Flush) !void {
     switch (builtin.os.tag) {
         .windows => {
