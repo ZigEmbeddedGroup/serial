@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const c = @cImport(@cInclude("termios.h"));
 
 pub fn list() !PortIterator {
     return try PortIterator.init();
@@ -815,10 +814,8 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
         .linux, .macos => |tag| {
             var settings = try std.posix.tcgetattr(port.handle);
 
-            var macos_nonstandard_baud = false;
             const baudmask: std.c.speed_t = switch (tag) {
                 .macos => mapBaudToMacOSEnum(config.baud_rate) orelse b: {
-                    macos_nonstandard_baud = true;
                     break :b @enumFromInt(@as(u64, @bitCast(settings.cflag)));
                 },
                 .linux => try mapBaudToLinuxEnum(config.baud_rate),
@@ -826,56 +823,59 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             };
 
             // initialize CFLAG with the baudrate bits
-            var strct_cflag: std.c.tc_cflag_t = @bitCast(@intFromEnum(baudmask));
-            strct_cflag.CREAD = true; // 0x80
+            settings.cflag = @bitCast(@intFromEnum(baudmask));
+            settings.cflag.PARODD = config.parity == .odd or config.parity == .mark;
+            settings.cflag.PARENB = config.parity != .none;
+            settings.cflag.CLOCAL = config.handshake == .none;
+            settings.cflag.CSTOPB = config.stop_bits == .two;
+            settings.cflag.CREAD = true;
+            settings.cflag.CSIZE = switch (config.word_size) {
+                .five => .CS5,
+                .six => .CS6,
+                .seven => .CS7,
+                .eight => .CS8,
+            };
 
             settings.iflag = .{};
-            settings.oflag = .{};
-            settings.cflag = strct_cflag;
-            settings.lflag = .{};
+            settings.iflag.IXON = config.handshake == .software;
+            settings.iflag.IXOFF = config.handshake == .software;
+            // these are common between linux and macos
+            // settings.iflag.IGNBRK = false;
+            // settings.iflag.BRKINT = false;
+            // settings.iflag.IGNPAR = false;
+            // settings.iflag.PARMRK = false;
+            // settings.iflag.INPCK = false;
+            // settings.iflag.ISTRIP = false;
+            // settings.iflag.INLCR = false;
+            // settings.iflag.IGNCR = false;
+            // settings.iflag.ICRNL = false;
+            // settings.iflag.IXANY = false;
+            // settings.iflag.IMAXBEL = false;
+            // settings.iflag.IUTF8 = false;
 
-            switch (config.parity) {
-                .none => {},
-                .odd => settings.cflag.PARODD = true,
-                .even => {}, // even parity is default when parity is enabled
-                .mark => {
-                    settings.cflag.PARODD = true;
-                    // settings.cflag.CMSPAR = true;
-                    settings.cflag._ |= (1 << 14);
-                },
-                .space => settings.cflag._ |= 1,
-            }
-            if (config.parity != .none) {
-                settings.iflag.INPCK = true; // enable parity checking
-                settings.cflag.PARENB = true; // enable parity generation
-            }
+            // these are where they diverge
+            if (builtin.os.tag == .linux) {
+                settings.cflag.CMSPAR = config.parity == .mark;
+                settings.cflag.CRTSCTS = config.handshake == .hardware;
+                // settings.cflag.ADDRB = false;
+                // settings.iflag.IUCLC = false;
 
-            switch (config.handshake) {
-                .none => settings.cflag.CLOCAL = true,
-                .software => {
-                    settings.iflag.IXON = true;
-                    settings.iflag.IXOFF = true;
-                },
-                // .hardware => settings.cflag.CRTSCTS = true,
-                .hardware => settings.cflag._ |= 1 << 15,
-            }
-
-            switch (config.stop_bits) {
-                .one => {},
-                .two => settings.cflag.CSTOPB = true,
-            }
-
-            switch (config.word_size) {
-                .five => settings.cflag.CSIZE = .CS5,
-                .six => settings.cflag.CSIZE = .CS6,
-                .seven => settings.cflag.CSIZE = .CS7,
-                .eight => settings.cflag.CSIZE = .CS8,
-            }
-
-            if (!macos_nonstandard_baud) {
+                // these are actually the same, but for simplicity
+                // just setting baud on mac with cfsetspeed
                 settings.ispeed = baudmask;
                 settings.ospeed = baudmask;
             }
+            if (builtin.os.tag == .macos) {
+                settings.cflag.CCTS_OFLOW = config.handshake == .hardware;
+                settings.cflag.CRTS_IFLOW = config.handshake == .hardware;
+                // settings.cflag.CIGNORE = false;
+                // settings.cflag.CDTR_IFLOW = false;
+                // settings.cflag.CDSR_OFLOW = false;
+                // settings.cflag.CCAR_OFLOW = false;
+            }
+
+            settings.oflag = .{};
+            settings.lflag = .{};
 
             settings.cc[VMIN] = 1;
             settings.cc[VSTOP] = 0x13; // XOFF
@@ -884,54 +884,55 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
 
             try std.posix.tcsetattr(port.handle, .NOW, settings);
 
-            if (builtin.os.tag == .macos and macos_nonstandard_baud) {
-                // macOS ioctl takes ulongs, but std.c.ioctl disagrees.
-                const IOSSIOSPEED: c_uint = 0x80085402;
-                const speed: c_uint = @intCast(config.baud_rate);
-                if (std.c.ioctl(port.handle, @bitCast(IOSSIOSPEED), &speed) == -1) {
+            if (builtin.os.tag == .macos) {
+                if (-1 == cfsetspeed(&settings, config.baud_rate))
                     return error.UnsupportedBaudRate;
-                }
             }
         },
         else => @compileError("unsupported OS, please implement!"),
     }
 }
 
+const Flush = enum {
+    input,
+    output,
+    both,
+};
+
 /// Flushes the serial port `port`. If `input` is set, all pending data in
 /// the receive buffer is flushed, if `output` is set all pending data in
 /// the send buffer is flushed.
-pub fn flushSerialPort(port: std.fs.File, input: bool, output: bool) !void {
-    if (!input and !output)
-        return;
-
+pub fn flushSerialPort(port: std.fs.File, flush: Flush) !void {
     switch (builtin.os.tag) {
         .windows => {
-            const success = if (input and output)
-                PurgeComm(port.handle, PURGE_TXCLEAR | PURGE_RXCLEAR)
-            else if (input)
-                PurgeComm(port.handle, PURGE_RXCLEAR)
-            else if (output)
-                PurgeComm(port.handle, PURGE_TXCLEAR)
-            else
-                @as(std.os.windows.BOOL, 0);
-            if (success == 0)
+            const mode: std.os.windows.DWORD = switch (flush) {
+                .input => PURGE_RXCLEAR,
+                .output => PURGE_TXCLEAR,
+                .both => PURGE_TXCLEAR | PURGE_RXCLEAR,
+            };
+            if (0 == PurgeComm(port.handle, mode))
                 return error.FlushError;
         },
-
-        .linux => if (input and output)
-            try tcflush(port.handle, TCIOFLUSH)
-        else if (input)
-            try tcflush(port.handle, TCIFLUSH)
-        else if (output)
-            try tcflush(port.handle, TCOFLUSH),
-
-        .macos => if (input and output)
-            try tcflush(port.handle, c.TCIOFLUSH)
-        else if (input)
-            try tcflush(port.handle, c.TCIFLUSH)
-        else if (output)
-            try tcflush(port.handle, c.TCOFLUSH),
-
+        .linux => {
+            const TCFLSH = 0x540B;
+            const mode: usize = switch (flush) {
+                .input => 0, // TCIFLUSH
+                .output => 1, // TCOFLUSH
+                .both => 2, // TCIOFLUSH
+            };
+            if (0 != std.os.linux.syscall3(.ioctl, @as(usize, @bitCast(@as(isize, port.handle))), TCFLSH, mode))
+                return error.FlushError;
+        },
+        .macos => {
+            const mode: c_int = switch (flush) {
+                // https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/termios.h
+                .input => 1, // TCIFLUSH
+                .output => 2, // TCOFLUSH
+                .both => 3, // TCIOFLUSH
+            };
+            if (0 != tcflush(port.handle, mode))
+                return error.FlushError;
+        },
         else => @compileError("unsupported OS, please implement!"),
     }
 }
@@ -1004,28 +1005,6 @@ const PURGE_TXCLEAR = 0x0004;
 
 extern "kernel32" fn PurgeComm(hFile: std.os.windows.HANDLE, dwFlags: std.os.windows.DWORD) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
 extern "kernel32" fn EscapeCommFunction(hFile: std.os.windows.HANDLE, dwFunc: std.os.windows.DWORD) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
-
-const TCIFLUSH = 0;
-const TCOFLUSH = 1;
-const TCIOFLUSH = 2;
-const TCFLSH = 0x540B;
-
-fn tcflush(fd: std.os.linux.fd_t, mode: usize) !void {
-    switch (builtin.os.tag) {
-        .linux => {
-            if (std.os.linux.syscall3(.ioctl, @as(usize, @bitCast(@as(isize, fd))), TCFLSH, mode) != 0)
-                return error.FlushError;
-        },
-        .macos => {
-            const err = c.tcflush(fd, @as(c_int, @intCast(mode)));
-            if (err != 0) {
-                std.debug.print("tcflush failed: {d}\r\n", .{err});
-                return error.FlushError;
-            }
-        },
-        else => @compileError("unsupported OS, please implement!"),
-    }
-}
 
 fn mapBaudToLinuxEnum(baudrate: usize) !std.c.speed_t {
     return switch (baudrate) {
@@ -1179,12 +1158,15 @@ test "basic flush test" {
     var port = try std.fs.cwd().openFile(tty, .{ .mode = .read_write });
     defer port.close();
 
-    try flushSerialPort(port, true, true);
-    try flushSerialPort(port, true, false);
-    try flushSerialPort(port, false, true);
-    try flushSerialPort(port, false, false);
+    try flushSerialPort(port, .both);
+    try flushSerialPort(port, .input);
+    try flushSerialPort(port, .output);
 }
 
 test "change control pins" {
     _ = changeControlPins;
 }
+
+// darwin
+extern "c" fn tcflush(fd: c_int, mode: c_int) c_int;
+extern "c" fn cfsetspeed(termios_p: *std.posix.termios, speed: c_uint) c_int;
