@@ -544,31 +544,27 @@ const LinuxInformationIterator = struct {
     serial_buffer: [256:0]u8 = undefined,
     port: PortInformation = undefined,
 
-    pub fn init()!Self{
+    pub fn init() !Self {
         var dir = try std.fs.cwd().openDir(root_dir, .{ .iterate = true });
         errdefer dir.close();
 
-        return Self{
-            .index = 0,
-            .dir = dir,
-            .iterator = dir.iterate()
-        };
+        return Self{ .index = 0, .dir = dir, .iterator = dir.iterate() };
     }
 
-    pub fn deinit(self: *Self) void{
+    pub fn deinit(self: *Self) void {
         self.dir.close();
         self.* = undefined;
     }
 
-    pub fn next(self: *Self) !?PortInformation{
+    pub fn next(self: *Self) !?PortInformation {
         self.index += 1;
-        while(try self.iterator.next()) |entry| {
+        while (try self.iterator.next()) |entry| {
             @memset(&self.sys_buffer, 0);
             @memset(&self.desc_buffer, 0);
             @memset(&self.man_buffer, 0);
             @memset(&self.serial_buffer, 0);
             @memset(&self.driver_path_buffer, 0);
-               
+
             // not a dir => we don't care
             var tty_dir = self.dir.openDir(entry.name, .{}) catch continue;
             defer tty_dir.close();
@@ -593,13 +589,11 @@ const LinuxInformationIterator = struct {
             const subsystem_path = device_dir.readLink("subsystem", &self.driver_path_buffer) catch continue;
             const subsystem = std.fs.path.basename(subsystem_path);
             var device_path: []u8 = undefined;
-            if(std.mem.eql(u8, subsystem, "usb") == true){
-                device_path= try device_dir.realpath("../", &self.driver_path_buffer);
-            }
-            else if(std.mem.eql(u8, subsystem, "usb-serial") == true){
+            if (std.mem.eql(u8, subsystem, "usb") == true) {
+                device_path = try device_dir.realpath("../", &self.driver_path_buffer);
+            } else if (std.mem.eql(u8, subsystem, "usb-serial") == true) {
                 device_path = try device_dir.realpath("../../", &self.driver_path_buffer);
-            }
-            else{
+            } else {
                 //must be remove to manage other device type
                 self.port.description = "Not Managed";
                 self.port.manufacturer = "Not Managed";
@@ -635,9 +629,9 @@ const LinuxInformationIterator = struct {
         }
         return null;
     }
-    fn clean_file_read(buf: []u8) void{
+    fn clean_file_read(buf: []u8) void {
         for (buf) |*item| {
-            if(item.* == '\n'){
+            if (item.* == '\n') {
                 item.* = 0;
                 break;
             }
@@ -826,56 +820,62 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             };
 
             // initialize CFLAG with the baudrate bits
-            var strct_cflag: std.c.tc_cflag_t = @bitCast(@intFromEnum(baudmask));
-            strct_cflag.CREAD = true; // 0x80
+            settings.cflag = @bitCast(@intFromEnum(baudmask));
+            settings.cflag.PARODD = config.parity == .odd or config.parity == .mark;
+            settings.cflag.PARENB = config.parity != .none;
+            settings.cflag.CLOCAL = config.handshake == .none;
+            settings.cflag.CSTOPB = config.stop_bits == .two;
+            settings.cflag.CREAD = true;
+            settings.cflag.CSIZE = switch (config.word_size) {
+                .five => .CS5,
+                .six => .CS6,
+                .seven => .CS7,
+                .eight => .CS8,
+            };
 
             settings.iflag = .{};
-            settings.oflag = .{};
-            settings.cflag = strct_cflag;
-            settings.lflag = .{};
+            settings.iflag.INPCK = config.parity != .none;
+            settings.iflag.IXON = config.handshake == .software;
+            settings.iflag.IXOFF = config.handshake == .software;
+            // these are common between linux and macos
+            // settings.iflag.IGNBRK = false;
+            // settings.iflag.BRKINT = false;
+            // settings.iflag.IGNPAR = false;
+            // settings.iflag.PARMRK = false;
+            // settings.iflag.ISTRIP = false;
+            // settings.iflag.INLCR = false;
+            // settings.iflag.IGNCR = false;
+            // settings.iflag.ICRNL = false;
+            // settings.iflag.IXANY = false;
+            // settings.iflag.IMAXBEL = false;
+            // settings.iflag.IUTF8 = false;
 
-            switch (config.parity) {
-                .none => {},
-                .odd => settings.cflag.PARODD = true,
-                .even => {}, // even parity is default when parity is enabled
-                .mark => {
-                    settings.cflag.PARODD = true;
-                    // settings.cflag.CMSPAR = true;
-                    settings.cflag._ |= (1 << 14);
-                },
-                .space => settings.cflag._ |= 1,
-            }
-            if (config.parity != .none) {
-                settings.iflag.INPCK = true; // enable parity checking
-                settings.cflag.PARENB = true; // enable parity generation
-            }
+            // these are where they diverge
+            if (builtin.os.tag == .linux) {
+                settings.cflag.CMSPAR = config.parity == .mark;
+                settings.cflag.CRTSCTS = config.handshake == .hardware;
+                // settings.cflag.ADDRB = false;
+                // settings.iflag.IUCLC = false;
 
-            switch (config.handshake) {
-                .none => settings.cflag.CLOCAL = true,
-                .software => {
-                    settings.iflag.IXON = true;
-                    settings.iflag.IXOFF = true;
-                },
-                // .hardware => settings.cflag.CRTSCTS = true,
-                .hardware => settings.cflag._ |= 1 << 15,
+                // these are actually the same, but for simplicity
+                // just setting baud on mac with cfsetspeed
             }
-
-            switch (config.stop_bits) {
-                .one => {},
-                .two => settings.cflag.CSTOPB = true,
-            }
-
-            switch (config.word_size) {
-                .five => settings.cflag.CSIZE = .CS5,
-                .six => settings.cflag.CSIZE = .CS6,
-                .seven => settings.cflag.CSIZE = .CS7,
-                .eight => settings.cflag.CSIZE = .CS8,
+            if (builtin.os.tag == .macos) {
+                settings.cflag.CCTS_OFLOW = config.handshake == .hardware;
+                settings.cflag.CRTS_IFLOW = config.handshake == .hardware;
+                // settings.cflag.CIGNORE = false;
+                // settings.cflag.CDTR_IFLOW = false;
+                // settings.cflag.CDSR_OFLOW = false;
+                // settings.cflag.CCAR_OFLOW = false;
             }
 
             if (!macos_nonstandard_baud) {
                 settings.ispeed = baudmask;
                 settings.ospeed = baudmask;
             }
+
+            settings.oflag = .{};
+            settings.lflag = .{};
 
             settings.cc[VMIN] = 1;
             settings.cc[VSTOP] = 0x13; // XOFF
@@ -885,7 +885,6 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
             try std.posix.tcsetattr(port.handle, .NOW, settings);
 
             if (builtin.os.tag == .macos and macos_nonstandard_baud) {
-                // macOS ioctl takes ulongs, but std.c.ioctl disagrees.
                 const IOSSIOSPEED: c_uint = 0x80085402;
                 const speed: c_uint = @intCast(config.baud_rate);
                 if (std.c.ioctl(port.handle, @bitCast(IOSSIOSPEED), &speed) == -1) {
