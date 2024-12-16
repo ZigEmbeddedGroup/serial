@@ -692,24 +692,24 @@ const DarwinPortIterator = struct {
     }
 };
 
-pub const Parity = enum {
+pub const Parity = enum(u8) {
     /// No parity bit is used
-    none,
+    none = 'N',
     /// Parity bit is `0` when an even number of bits is set in the data.
-    even,
+    even = 'E',
     /// Parity bit is `0` when an odd number of bits is set in the data.
-    odd,
+    odd = 'O',
     /// Parity bit is always `1`
-    mark,
+    mark = 'M',
     /// Parity bit is always `0`
-    space,
+    space = 'S',
 };
 
-pub const StopBits = enum {
+pub const StopBits = enum(u2) {
     /// The length of the stop bit is 1 bit
-    one,
+    one = 1,
     /// The length of the stop bit is 2 bits
-    two,
+    two = 2,
 };
 
 pub const Handshake = enum {
@@ -721,14 +721,16 @@ pub const Handshake = enum {
     hardware,
 };
 
-pub const WordSize = enum {
-    five,
-    six,
-    seven,
-    eight,
+pub const WordSize = enum(u4) {
+    five = 5,
+    six = 6,
+    seven = 7,
+    eight = 8,
 };
 
 pub const SerialConfig = struct {
+    const Self = @This();
+
     /// Symbol rate in bits/second. Not that these
     /// include also parity and stop bits.
     baud_rate: u32,
@@ -745,6 +747,16 @@ pub const SerialConfig = struct {
 
     /// Defines the handshake protocol used.
     handshake: Handshake = .none,
+
+    pub fn format(self: Self, fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = options;
+        _ = fmt;
+        return writer.print("{d}@{d}{c}{d}{s}", .{ self.baud_rate, @intFromEnum(self.word_size), @intFromEnum(self.parity), @intFromEnum(self.stop_bits), switch (self.handshake) {
+            .none => "",
+            .hardware => " RTS/CTS",
+            .software => " XON/XOFF",
+        } });
+    }
 };
 
 const CBAUD = 0o000000010017; //Baud speed mask (not in POSIX).
@@ -1168,3 +1180,72 @@ test "basic flush test" {
 test "change control pins" {
     _ = changeControlPins;
 }
+
+test "bufPrint tests" {
+    var buf: [32]u8 = undefined;
+
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+        .handshake = .software,
+        .baud_rate = 115200,
+        .parity = .none,
+        .word_size = .eight,
+        .stop_bits = .one,
+    }}), "115200@8N1 XON/XOFF"));
+
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+        .handshake = .hardware,
+        .baud_rate = 115200,
+        .parity = .none,
+        .word_size = .eight,
+        .stop_bits = .one,
+    }}), "115200@8N1 RTS/CTS"));
+
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+        .handshake = .none,
+        .baud_rate = 115200,
+        .parity = .none,
+        .word_size = .eight,
+        .stop_bits = .one,
+    }}), "115200@8N1"));
+
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+        .handshake = .none,
+        .baud_rate = 115200,
+        .parity = .even,
+        .word_size = .eight,
+        .stop_bits = .one,
+    }}), "115200@8E1"));
+
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+        .handshake = .none,
+        .baud_rate = 115200,
+        .parity = .odd,
+        .word_size = .eight,
+        .stop_bits = .one,
+    }}), "115200@8O1"));
+
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+        .handshake = .none,
+        .baud_rate = 115200,
+        .parity = .space,
+        .word_size = .eight,
+        .stop_bits = .one,
+    }}), "115200@8S1"));
+
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+        .handshake = .none,
+        .baud_rate = 115200,
+        .parity = .mark,
+        .word_size = .eight,
+        .stop_bits = .one,
+    }}), "115200@8M1"));
+
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+        .handshake = .none,
+        .baud_rate = 9600,
+        .parity = .mark,
+        .word_size = .five,
+        .stop_bits = .one,
+    }}), "9600@5M1"));
+}
+
