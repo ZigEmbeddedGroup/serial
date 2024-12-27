@@ -748,164 +748,208 @@ pub const SerialConfig = struct {
     /// Defines the handshake protocol used.
     handshake: Handshake = .none,
 
+    /// Timeout. Max timeout for posix is 25.5 seconds/255 deciseconds
+    timeout: ?Timeout = null,
+
     pub fn format(self: Self, fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = options;
         _ = fmt;
-        return writer.print("{d}@{d}{c}{d}{s}", .{ self.baud_rate, @intFromEnum(self.word_size), @intFromEnum(self.parity), @intFromEnum(self.stop_bits), switch (self.handshake) {
-            .none => "",
-            .hardware => " RTS/CTS",
-            .software => " XON/XOFF",
-        } });
+        return writer.print("{d}@{d}{c}{d}{s}", .{
+            self.baud_rate,
+            @intFromEnum(self.word_size),
+            @intFromEnum(self.parity),
+            @intFromEnum(self.stop_bits),
+            switch (self.handshake) {
+                .none => "",
+                .hardware => " RTS/CTS",
+                .software => " XON/XOFF",
+            },
+        });
     }
+};
+
+/// Max timeout for posix is 25500 milliseconds/255 deciseconds
+/// Windows uses a u32 for milliseconds, posix uses u8 for deciseconds
+/// ms will be converted to deciseconds if used on posix.
+pub const Timeout = union(enum) {
+    /// milliseconds
+    ms: u32,
+
+    /// deciseconds for posix
+    ds: u8,
 };
 
 const CBAUD = 0o000000010017; //Baud speed mask (not in POSIX).
 const CMSPAR = 0o010000000000;
 const CRTSCTS = 0o020000000000;
 
-const VTIME = 5;
-const VMIN = 6;
-const VSTART = 8;
-const VSTOP = 9;
-
 /// This function configures a serial port with the given config.
 /// `port` is an already opened serial port, on windows these
 /// are either called `\\.\COMxx\` or `COMx`, on unixes the serial
 /// port is called `/dev/ttyXXX`.
 pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
-    switch (builtin.os.tag) {
-        .windows => {
-            var dcb = std.mem.zeroes(DCB);
-            dcb.DCBlength = @sizeOf(DCB);
+    if (builtin.os.tag == .windows) {
+        var dcb = std.mem.zeroes(DCB);
+        dcb.DCBlength = @sizeOf(DCB);
 
-            if (GetCommState(port.handle, &dcb) == 0)
-                return error.WindowsError;
+        if (GetCommState(port.handle, &dcb) == 0)
+            return error.WindowsError;
 
-            // std.log.err("{s} {s}", .{ dcb, flags });
+        // std.log.err("{s} {s}", .{ dcb, flags });
 
-            dcb.BaudRate = config.baud_rate;
+        dcb.BaudRate = config.baud_rate;
 
-            dcb.flags = @bitCast(DCBFlags{
-                .fParity = config.parity != .none,
-                .fOutxCtsFlow = config.handshake == .hardware,
-                .fOutX = config.handshake == .software,
-                .fInX = config.handshake == .software,
-                .fRtsControl = @as(u2, if (config.handshake == .hardware) 1 else 0),
-            });
+        dcb.flags = @bitCast(DCBFlags{
+            .fParity = config.parity != .none,
+            .fOutxCtsFlow = config.handshake == .hardware,
+            .fOutX = config.handshake == .software,
+            .fInX = config.handshake == .software,
+            .fRtsControl = @as(u2, if (config.handshake == .hardware) 1 else 0),
+        });
 
-            dcb.wReserved = 0;
-            dcb.ByteSize = switch (config.word_size) {
-                .five => @as(u8, 5),
-                .six => @as(u8, 6),
-                .seven => @as(u8, 7),
-                .eight => @as(u8, 8),
-            };
-            dcb.Parity = switch (config.parity) {
-                .none => @as(u8, 0),
-                .even => @as(u8, 2),
-                .odd => @as(u8, 1),
-                .mark => @as(u8, 3),
-                .space => @as(u8, 4),
-            };
-            dcb.StopBits = switch (config.stop_bits) {
-                .one => @as(u2, 0),
-                .two => @as(u2, 2),
-            };
-            dcb.XonChar = 0x11;
-            dcb.XoffChar = 0x13;
-            dcb.wReserved1 = 0;
+        dcb.wReserved = 0;
+        dcb.ByteSize = switch (config.word_size) {
+            .five => @as(u8, 5),
+            .six => @as(u8, 6),
+            .seven => @as(u8, 7),
+            .eight => @as(u8, 8),
+        };
+        dcb.Parity = switch (config.parity) {
+            .none => @as(u8, 0),
+            .even => @as(u8, 2),
+            .odd => @as(u8, 1),
+            .mark => @as(u8, 3),
+            .space => @as(u8, 4),
+        };
+        dcb.StopBits = switch (config.stop_bits) {
+            .one => @as(u2, 0),
+            .two => @as(u2, 2),
+        };
+        dcb.XonChar = 0x11;
+        dcb.XoffChar = 0x13;
+        dcb.wReserved1 = 0;
 
-            if (SetCommState(port.handle, &dcb) == 0)
-                return error.WindowsError;
-        },
-        .linux, .macos => |tag| {
-            var settings = try std.posix.tcgetattr(port.handle);
-
-            var macos_nonstandard_baud = false;
-            const baudmask: std.c.speed_t = switch (tag) {
-                .macos => mapBaudToMacOSEnum(config.baud_rate) orelse b: {
-                    macos_nonstandard_baud = true;
-                    break :b @enumFromInt(@as(u64, @bitCast(settings.cflag)));
-                },
-                .linux => try mapBaudToLinuxEnum(config.baud_rate),
-                else => unreachable,
-            };
-
-            // initialize CFLAG with the baudrate bits
-            settings.cflag = @bitCast(@intFromEnum(baudmask));
-            settings.cflag.PARODD = config.parity == .odd or config.parity == .mark;
-            settings.cflag.PARENB = config.parity != .none;
-            settings.cflag.CLOCAL = config.handshake == .none;
-            settings.cflag.CSTOPB = config.stop_bits == .two;
-            settings.cflag.CREAD = true;
-            settings.cflag.CSIZE = switch (config.word_size) {
-                .five => .CS5,
-                .six => .CS6,
-                .seven => .CS7,
-                .eight => .CS8,
-            };
-
-            settings.iflag = .{};
-            settings.iflag.INPCK = config.parity != .none;
-            settings.iflag.IXON = config.handshake == .software;
-            settings.iflag.IXOFF = config.handshake == .software;
-            // these are common between linux and macos
-            // settings.iflag.IGNBRK = false;
-            // settings.iflag.BRKINT = false;
-            // settings.iflag.IGNPAR = false;
-            // settings.iflag.PARMRK = false;
-            // settings.iflag.ISTRIP = false;
-            // settings.iflag.INLCR = false;
-            // settings.iflag.IGNCR = false;
-            // settings.iflag.ICRNL = false;
-            // settings.iflag.IXANY = false;
-            // settings.iflag.IMAXBEL = false;
-            // settings.iflag.IUTF8 = false;
-
-            // these are where they diverge
-            if (builtin.os.tag == .linux) {
-                settings.cflag.CMSPAR = config.parity == .mark;
-                settings.cflag.CRTSCTS = config.handshake == .hardware;
-                // settings.cflag.ADDRB = false;
-                // settings.iflag.IUCLC = false;
-
-                // these are actually the same, but for simplicity
-                // just setting baud on mac with cfsetspeed
-            }
-            if (builtin.os.tag == .macos) {
-                settings.cflag.CCTS_OFLOW = config.handshake == .hardware;
-                settings.cflag.CRTS_IFLOW = config.handshake == .hardware;
-                // settings.cflag.CIGNORE = false;
-                // settings.cflag.CDTR_IFLOW = false;
-                // settings.cflag.CDSR_OFLOW = false;
-                // settings.cflag.CCAR_OFLOW = false;
-            }
-
-            if (!macos_nonstandard_baud) {
-                settings.ispeed = baudmask;
-                settings.ospeed = baudmask;
-            }
-
-            settings.oflag = .{};
-            settings.lflag = .{};
-
-            settings.cc[VMIN] = 1;
-            settings.cc[VSTOP] = 0x13; // XOFF
-            settings.cc[VSTART] = 0x11; // XON
-            settings.cc[VTIME] = 0;
-
-            try std.posix.tcsetattr(port.handle, .NOW, settings);
-
-            if (builtin.os.tag == .macos and macos_nonstandard_baud) {
-                const IOSSIOSPEED: c_uint = 0x80085402;
-                const speed: c_uint = @intCast(config.baud_rate);
-                if (std.c.ioctl(port.handle, @bitCast(IOSSIOSPEED), &speed) == -1) {
-                    return error.UnsupportedBaudRate;
-                }
-            }
-        },
-        else => @compileError("unsupported OS, please implement!"),
+        if (SetCommState(port.handle, &dcb) == 0)
+            return error.WindowsError;
+        return;
     }
+    // posix config
+    var settings = try std.posix.tcgetattr(port.handle);
+
+    const macos_nonstandard_baud = false;
+    const speed_t = getSpeed(config.baud_rate) orelse blk: {
+        if (builtin.os.tag == .macos) {
+            macos_nonstandard_baud = true;
+            break :blk std.posix.speed_t.B9600;
+            // just filling it with anything to appease the compiler, it won't be used.
+        }
+        return error.UnsupportedBaudRate;
+    };
+    const parity = config.parity;
+    const stop_bits = config.stop_bits;
+    const line_ending = config.line_ending;
+    const word_size: std.posix.CSIZE = switch (config.word_size) {
+        .five => .CS5,
+        .six => .CS6,
+        .seven => .CS7,
+        .eight => .CS8,
+    };
+
+    settings.iflag = .{};
+    safeSet(settings.iflag, "IGNPAR", parity == .none);
+    safeSet(settings.iflag, "PARMRK", parity != .none);
+    safeSet(settings.iflag, "INPCK", parity == .none);
+    safeSet(settings.iflag, "IXON", handshake == .software);
+    safeSet(settings.iflag, "IXOFF", handshake == .software);
+    safeSet(settings.iflag, "IXANY", handshake == .software);
+    safeSet(settings.iflag, "INLCR", false);
+    safeSet(settings.iflag, "ICRNL", false);
+    safeSet(settings.iflag, "IGNBRK", false);
+    safeSet(settings.iflag, "BRKINT", false);
+    safeSet(settings.iflag, "ISTRIP", false);
+    safeSet(settings.iflag, "IGNCR", false);
+    safeSet(settings.iflag, "IMAXBEL", false);
+    safeSet(settings.iflag, "IUTF8", false);
+    safeSet(settings.iflag, "IUCLC", false);
+    safeSet(settings.iflag, "DOSMODE", false);
+    settings.cflag = .{};
+    safeSet(settings.cflag, "PARENB", parity != .none);
+    safeSet(settings.cflag, "CMSPAR", parity == .mark);
+    safeSet(settings.cflag, "PARODD", parity == .odd or parity == .mark);
+    safeSet(settings.cflag, "PAREXT", parity == .mark or parity == .space);
+    safeSet(settings.cflag, "CLOCAL", handshake == .none);
+    safeSet(settings.cflag, "CNO_RTSDTR", handshake == .none);
+    safeSet(settings.cflag, "HUPCL", handshake == .hardware);
+    safeSet(settings.cflag, "MDMBUF", handshake == .hardware);
+    safeSet(settings.cflag, "CRTSCTS", handshake == .hardware);
+    safeSet(settings.cflag, "CTSFLOW", handshake == .hardware);
+    safeSet(settings.cflag, "RTSFLOW", handshake == .hardware);
+    safeSet(settings.cflag, "CDTRCTS", handshake == .hardware);
+    safeSet(settings.cflag, "CRTSXOFF", handshake == .hardware);
+    safeSet(settings.cflag, "CCTS_OFLOW", handshake == .hardware);
+    safeSet(settings.cflag, "CRTS_IFLOW", handshake == .hardware);
+    safeSet(settings.cflag, "CDTR_IFLOW", handshake == .hardware);
+    safeSet(settings.cflag, "CDSR_OFLOW", handshake == .hardware);
+    safeSet(settings.cflag, "CCAR_OFLOW", handshake == .hardware);
+    safeSet(settings.cflag, "CSTOPB", stop_bits == .two);
+    safeSet(settings.cflag, "CSIZE", word_size);
+    safeSet(settings.cflag, "CREAD", true);
+    safeSet(settings.cflag, "CIGNORE", false);
+    safeSet(settings.cflag, "CBAUDEXT", baud > 38400);
+    safeSet(settings.cflag, "CIBAUDEXT", baud > 38400);
+    safeSet(settings.cflag, "LOBLK", false);
+    safeSet(settings.cflag, "ADDRB", false);
+    safeSet(settings.cflag, "XLOBLK", false);
+    safeSet(settings.cflag, "RCV1EN", false);
+    safeSet(settings.cflag, "XMT1EN", false);
+    safeSet(settings.cflag, "XCLUDE", false);
+    settings.lflag = .{};
+    settings.oflag = .{};
+
+    if (@hasField(settings, "ispeed")) {
+        if (!macos_nonstandard_baud) settings.ispeed = speed_t;
+    }
+    if (@hasField(settings, "ospeed")) {
+        if (!macos_nonstandard_baud) settings.ospeed = speed_t;
+    }
+    if (@hasField(settings, "line")) {
+        // I don't have a system with this, leaving it here for now
+    }
+
+    if (config.timeout) |timeout| {
+        settings.cc[std.posix.V.MIN] = 0;
+        settings.cc[std.posix.V.TIME] = switch (timeout) {
+            .ds => |ds| ds,
+            .ms => |ms| blk: {
+                const deciseconds = (ms + 99) / 100;
+                break :blk if (deciseconds > 255) 255 else @as(u8, @intCast(deciseconds));
+            },
+        };
+    } else {
+        settings.cc[std.posix.V.MIN] = 1;
+        settings.cc[std.posix.V.TIME] = 0;
+    }
+    settings.cc[std.posix.V.STOP] = 0x13; // XOFF
+    settings.cc[std.posix.V.START] = 0x11; // XON
+
+    try std.posix.tcsetattr(port.handle, .NOW, settings);
+
+    if (macos_nonstandard_baud) {
+        const IOSSIOSPEED: c_uint = 0x80085402;
+        const speed: c_uint = @intCast(config.baud_rate);
+        if (-1 == std.c.ioctl(port.handle, @bitCast(IOSSIOSPEED), &speed))
+            return error.UnsupportedBaudRate;
+    }
+}
+
+/// Checks to see if the field exists before setting it.
+fn safeSet(container: anytype, field: []const u8, value: anytype) void {
+    if (@hasField(@TypeOf(container), field))
+        @field(container, field) = value;
+}
+
+fn getSpeed(baudrate: u32) ?std.posix.speed_t {
+    return std.meta.intToEnum(std.posix.speed_t, baudrate) catch null;
 }
 
 const Flush = enum {
@@ -1019,73 +1063,6 @@ const PURGE_TXCLEAR = 0x0004;
 
 extern "kernel32" fn PurgeComm(hFile: std.os.windows.HANDLE, dwFlags: std.os.windows.DWORD) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
 extern "kernel32" fn EscapeCommFunction(hFile: std.os.windows.HANDLE, dwFunc: std.os.windows.DWORD) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
-
-fn mapBaudToLinuxEnum(baudrate: usize) !std.c.speed_t {
-    return switch (baudrate) {
-        // from termios.h
-        50 => .B50,
-        75 => .B75,
-        110 => .B110,
-        134 => .B134,
-        150 => .B150,
-        200 => .B200,
-        300 => .B300,
-        600 => .B600,
-        1200 => .B1200,
-        1800 => .B1800,
-        2400 => .B2400,
-        4800 => .B4800,
-        9600 => .B9600,
-        19200 => .B19200,
-        38400 => .B38400,
-        // from termios-baud.h
-        57600 => .B57600,
-        115200 => .B115200,
-        230400 => .B230400,
-        460800 => .B460800,
-        500000 => .B500000,
-        576000 => .B576000,
-        921600 => .B921600,
-        1000000 => .B1000000,
-        1152000 => .B1152000,
-        1500000 => .B1500000,
-        2000000 => .B2000000,
-        2500000 => .B2500000,
-        3000000 => .B3000000,
-        3500000 => .B3500000,
-        4000000 => .B4000000,
-        else => error.UnsupportedBaudRate,
-    };
-}
-
-fn mapBaudToMacOSEnum(baudrate: usize) ?std.c.speed_t {
-    return switch (baudrate) {
-        // from termios.h
-        50 => .B50,
-        75 => .B75,
-        110 => .B110,
-        134 => .B134,
-        150 => .B150,
-        200 => .B200,
-        300 => .B300,
-        600 => .B600,
-        1200 => .B1200,
-        1800 => .B1800,
-        2400 => .B2400,
-        4800 => .B4800,
-        9600 => .B9600,
-        19200 => .B19200,
-        38400 => .B38400,
-        7200 => .B7200,
-        14400 => .B14400,
-        28800 => .B28800,
-        57600 => .B57600,
-        76800 => .B76800,
-        115200 => .B115200,
-        230400 => .B230400,
-        else => null,
-    };
-}
 
 const DCBFlags = packed struct(u32) {
     fBinary: bool = true, // u1
@@ -1248,4 +1225,3 @@ test "bufPrint tests" {
         .stop_bits = .one,
     }}), "9600@5M1"));
 }
-
