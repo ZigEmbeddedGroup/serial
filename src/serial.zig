@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const CallingConvention = std.builtin.CallingConvention;
 const c = @cImport(@cInclude("termios.h"));
 
 pub fn list() !PortIterator {
@@ -394,8 +395,8 @@ extern "advapi32" fn RegOpenKeyExA(
     ulOptions: std.os.windows.DWORD,
     samDesired: std.os.windows.REGSAM,
     phkResult: *HKEY,
-) callconv(std.os.windows.WINAPI) std.os.windows.LSTATUS;
-extern "advapi32" fn RegCloseKey(key: HKEY) callconv(std.os.windows.WINAPI) std.os.windows.LSTATUS;
+) callconv(CallingConvention.winapi) std.os.windows.LSTATUS;
+extern "advapi32" fn RegCloseKey(key: HKEY) callconv(CallingConvention.winapi) std.os.windows.LSTATUS;
 extern "advapi32" fn RegEnumValueA(
     hKey: HKEY,
     dwIndex: std.os.windows.DWORD,
@@ -405,7 +406,7 @@ extern "advapi32" fn RegEnumValueA(
     lpType: ?*std.os.windows.DWORD,
     lpData: [*]std.os.windows.BYTE,
     lpcbData: *std.os.windows.DWORD,
-) callconv(std.os.windows.WINAPI) std.os.windows.LSTATUS;
+) callconv(CallingConvention.winapi) std.os.windows.LSTATUS;
 extern "advapi32" fn RegQueryValueExA(
     hKey: HKEY,
     lpValueName: std.os.windows.LPSTR,
@@ -413,19 +414,21 @@ extern "advapi32" fn RegQueryValueExA(
     lpType: ?*std.os.windows.DWORD,
     lpData: ?[*]std.os.windows.BYTE,
     lpcbData: ?*std.os.windows.DWORD,
-) callconv(std.os.windows.WINAPI) std.os.windows.LSTATUS;
+) callconv(CallingConvention.winapi) std.os.windows.LSTATUS;
 extern "setupapi" fn SetupDiGetClassDevsW(
     classGuid: ?*const std.os.windows.GUID,
     enumerator: ?std.os.windows.PCWSTR,
     hwndParanet: ?HWND,
     flags: std.os.windows.DWORD,
-) callconv(std.os.windows.WINAPI) HDEVINFO;
+) callconv(CallingConvention.winapi) HDEVINFO;
 extern "setupapi" fn SetupDiEnumDeviceInfo(
     devInfoSet: HDEVINFO,
     memberIndex: std.os.windows.DWORD,
     device_info_data: *SP_DEVINFO_DATA,
-) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
-extern "setupapi" fn SetupDiDestroyDeviceInfoList(device_info_set: HDEVINFO) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+) callconv(CallingConvention.winapi) std.os.windows.BOOL;
+extern "setupapi" fn SetupDiDestroyDeviceInfoList(
+    device_info_set: HDEVINFO,
+) callconv(CallingConvention.winapi) std.os.windows.BOOL;
 extern "setupapi" fn SetupDiOpenDevRegKey(
     device_info_set: HDEVINFO,
     device_info_data: *SP_DEVINFO_DATA,
@@ -433,7 +436,7 @@ extern "setupapi" fn SetupDiOpenDevRegKey(
     hwProfile: std.os.windows.DWORD,
     keyType: std.os.windows.DWORD,
     samDesired: std.os.windows.REGSAM,
-) callconv(std.os.windows.WINAPI) HKEY;
+) callconv(CallingConvention.winapi) HKEY;
 extern "setupapi" fn SetupDiGetDeviceRegistryPropertyA(
     hDevInfo: HDEVINFO,
     pSpDevInfoData: *SP_DEVINFO_DATA,
@@ -442,25 +445,25 @@ extern "setupapi" fn SetupDiGetDeviceRegistryPropertyA(
     propertyBuffer: ?[*]std.os.windows.BYTE,
     propertyBufferSize: std.os.windows.DWORD,
     requiredSize: ?*std.os.windows.DWORD,
-) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+) callconv(CallingConvention.winapi) std.os.windows.BOOL;
 extern "setupapi" fn SetupDiGetDeviceInstanceIdA(
     device_info_set: HDEVINFO,
     device_info_data: *SP_DEVINFO_DATA,
     deviceInstanceId: *?std.os.windows.CHAR,
     deviceInstanceIdSize: std.os.windows.DWORD,
     requiredSize: ?*std.os.windows.DWORD,
-) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+) callconv(CallingConvention.winapi) std.os.windows.BOOL;
 extern "cfgmgr32" fn CM_Get_Parent(
     pdnDevInst: *DEVINST,
     dnDevInst: DEVINST,
     ulFlags: std.os.windows.ULONG,
-) callconv(std.os.windows.WINAPI) std.os.windows.DWORD;
+) callconv(CallingConvention.winapi) std.os.windows.DWORD;
 extern "cfgmgr32" fn CM_Get_Device_IDA(
     dnDevInst: DEVINST,
     buffer: std.os.windows.LPSTR,
     bufferLen: std.os.windows.ULONG,
     ulFlags: std.os.windows.ULONG,
-) callconv(std.os.windows.WINAPI) std.os.windows.DWORD;
+) callconv(CallingConvention.winapi) std.os.windows.DWORD;
 
 const LinuxPortIterator = struct {
     const Self = @This();
@@ -831,6 +834,37 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
 
         if (SetCommState(port.handle, &dcb) == 0)
             return error.WindowsError;
+
+        if (config.timeout == null) return;
+
+        var timeouts: COMMTIMEOUTS = std.mem.zeroes(COMMTIMEOUTS);
+        if (FALSE == GetCommTimeouts(handle, &timeouts))
+            return error.Configuration;
+
+        // Convert the timeout value based on the union type
+        const timeout_ms = switch (config.timeout.?) {
+            .ms => |ms| ms,
+            .ds => |ds| @as(u32, ds) * 100, // Convert deciseconds to milliseconds
+        };
+
+        if (timeout_ms == 0) {
+            const MAXDWORD: DWORD = 0xFFFFFFFF;
+            // Return immediately with any characters received
+            timeouts.ReadIntervalTimeout = MAXDWORD;
+            timeouts.ReadTotalTimeoutMultiplier = 0;
+            timeouts.ReadTotalTimeoutConstant = 0;
+            timeouts.WriteTotalTimeoutMultiplier = 0;
+            timeouts.WriteTotalTimeoutConstant = 0;
+        } else {
+            timeouts.ReadIntervalTimeout = 0;
+            timeouts.ReadTotalTimeoutMultiplier = 0;
+            timeouts.ReadTotalTimeoutConstant = timeout_ms;
+            timeouts.WriteTotalTimeoutMultiplier = 0;
+            timeouts.WriteTotalTimeoutConstant = timeout_ms;
+        }
+
+        if (FALSE == SetCommTimeouts(handle, &timeouts))
+            return error.Configuration;
         return;
     }
     // posix config
@@ -1061,8 +1095,33 @@ const PURGE_RXCLEAR = 0x0008;
 const PURGE_TXABORT = 0x0001;
 const PURGE_TXCLEAR = 0x0004;
 
-extern "kernel32" fn PurgeComm(hFile: std.os.windows.HANDLE, dwFlags: std.os.windows.DWORD) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
-extern "kernel32" fn EscapeCommFunction(hFile: std.os.windows.HANDLE, dwFunc: std.os.windows.DWORD) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+extern "kernel32" fn PurgeComm(
+    in_hFile: std.os.windows.HANDLE,
+    in_dwFlags: std.os.windows.DWORD,
+) callconv(CallingConvention.winapi) std.os.windows.BOOL;
+
+extern "kernel32" fn EscapeCommFunction(
+    in_hFile: HANDLE,
+    in_dwFunc: DWORD,
+) callconv(CallingConvention.winapi) std.os.windows.BOOL;
+
+extern "kernel32" fn GetCommTimeouts(
+    in_hFile: std.os.windows.HANDLE,
+    out_lpCommTimeouts: *COMMTIMEOUTS,
+) callconv(CallingConvention.winapi) std.os.windows.BOOL;
+
+extern "kernel32" fn SetCommTimeouts(
+    in_hFile: std.os.windows.HANDLE,
+    in_lpCommTimeouts: *COMMTIMEOUTS,
+) callconv(CallingConvention.winapi) std.os.windows.BOOL;
+
+const COMMTIMEOUTS = extern struct {
+    ReadIntervalTimeout: DWORD,
+    ReadTotalTimeoutMultiplier: DWORD,
+    ReadTotalTimeoutConstant: DWORD,
+    WriteTotalTimeoutMultiplier: DWORD,
+    WriteTotalTimeoutConstant: DWORD,
+};
 
 const DCBFlags = packed struct(u32) {
     fBinary: bool = true, // u1
@@ -1102,8 +1161,15 @@ const DCB = extern struct {
     wReserved1: std.os.windows.WORD,
 };
 
-extern "kernel32" fn GetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
-extern "kernel32" fn SetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+extern "kernel32" fn GetCommState(
+    in_hFile: std.os.windows.HANDLE,
+    in_out_lpDCB: *DCB,
+) callconv(CallingConvention.winapi) std.os.windows.BOOL;
+
+extern "kernel32" fn SetCommState(
+    in_hFile: std.os.windows.HANDLE,
+    in_lpDCB: *DCB,
+) callconv(CallingConvention.winapi) std.os.windows.BOOL;
 
 test "iterate ports" {
     var it = try list();
