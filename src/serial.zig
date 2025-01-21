@@ -319,7 +319,7 @@ const WindowsInformationIterator = struct {
         }
 
         if (delimiter) |del| {
-            var it = std.mem.tokenize(u8, devid, del);
+            var it = std.mem.tokenizeAny(u8, devid, del);
 
             // throw away the start
             _ = it.next();
@@ -351,7 +351,7 @@ const WindowsInformationIterator = struct {
         }
 
         if (delimiter) |del| {
-            var it = std.mem.tokenize(u8, devid, del);
+            var it = std.mem.tokenizeAny(u8, devid, del);
 
             while (it.next()) |segment| {
                 if (std.mem.startsWith(u8, segment, "VID_")) {
@@ -375,7 +375,7 @@ const WindowsInformationIterator = struct {
         }
 
         if (delimiter) |del| {
-            var it = std.mem.tokenize(u8, devid, del);
+            var it = std.mem.tokenizeAny(u8, devid, del);
 
             while (it.next()) |segment| {
                 if (std.mem.startsWith(u8, segment, "PID_")) {
@@ -1248,4 +1248,3 @@ test "bufPrint tests" {
         .stop_bits = .one,
     }}), "9600@5M1"));
 }
-
