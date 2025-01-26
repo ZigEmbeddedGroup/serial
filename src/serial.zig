@@ -864,8 +864,12 @@ pub fn configureSerialPort(port: std.fs.File, config: SerialConfig) !void {
 
             // these are where they diverge
             if (builtin.os.tag == .linux) {
-                settings.cflag.CMSPAR = config.parity == .mark;
-                settings.cflag.CRTSCTS = config.handshake == .hardware;
+                if (@hasField(std.c.tc_cflag_t, "CMSPAR")) {
+                    settings.cflag.CMSPAR = config.parity == .mark;
+                }
+                if (@hasField(std.c.tc_cflag_t, "CRTSCTS")) {
+                    settings.cflag.CRTSCTS = config.handshake == .hardware;
+                }
                 // settings.cflag.ADDRB = false;
                 // settings.iflag.IUCLC = false;
 
