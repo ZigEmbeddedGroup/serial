@@ -44,4 +44,12 @@ pub fn build(b: *std.Build) void {
             example_step.dependOn(&install_example.step);
         }
     }
+    const docs_step = b.step("docs", "Emit documentation");
+
+    const docs_install = b.addInstallDirectory(.{
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+        .source_dir = unit_tests.getEmittedDocs(),
+    });
+    docs_step.dependOn(&docs_install.step);
 }

@@ -1,6 +1,8 @@
 .{
-    .name = "serial",
+    .name = .serial,
     .version = "0.0.1",
+    .minimum_zig_version = "0.14.0",
+    .fingerprint = 0xd374c9dccc91873e,
     .paths = .{
         "src", // all files in src directory
         "README.md",

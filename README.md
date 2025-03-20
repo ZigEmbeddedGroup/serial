@@ -53,3 +53,12 @@ The `build.zig` file contains a test step that can be called with `zig build tes
 You can build the examples from the `./examples` directory by calling `zig build examples`. Binaries will be generated in `./zig-out/bin` by default.
 
 - Note that the `list_port_info` example currently only works on Windows
+
+### Building the documentation
+
+You can generate the documentation by running `zig build docs`.
+After that you can browse it by:
+
+ 1. starting the web server. For example, by running `python -m http.server 8000 zig-out/docs`
+ 2. reading the docs from your browser at `http://127.0.0.1:8000`
+
