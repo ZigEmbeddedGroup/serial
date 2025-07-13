@@ -2,6 +2,14 @@ const std = @import("std");
 const builtin = @import("builtin");
 const c = @cImport(@cInclude("termios.h"));
 
+// macOS-specific imports for IOKit
+const iokit = if (builtin.os.tag == .macos) @cImport({
+    @cInclude("IOKit/IOKitLib.h");
+    @cInclude("IOKit/serial/IOSerialKeys.h");
+    @cInclude("IOKit/usb/IOUSBLib.h");
+    @cInclude("CoreFoundation/CoreFoundation.h");
+}) else struct {};
+
 pub fn list() !PortIterator {
     return try PortIterator.init();
 }
@@ -20,7 +28,7 @@ pub const PortIterator = switch (builtin.os.tag) {
 pub const InformationIterator = switch (builtin.os.tag) {
     .windows => WindowsInformationIterator,
     .linux => LinuxInformationIterator,
-    // .linux, .macos => @panic("'Port Information' not yet implemented for this OS"),
+    .macos => DarwinInformationIterator,
     else => @compileError("OS is not supported for information iteration"),
 };
 
@@ -692,6 +700,391 @@ const DarwinPortIterator = struct {
     }
 };
 
+const DarwinInformationIterator = struct {
+    const Self = @This();
+
+    const root_dir = "/dev/";
+    /// Buffer size for device information strings (manufacturer, description, serial number, etc.)
+    /// This should be large enough to hold typical USB device strings plus null terminator
+    /// Can be adjusted based on system requirements - 256 bytes covers most real-world cases
+    const DEVICE_INFO_BUFFER_SIZE = 256;
+    /// Buffer size for IOKit class names when walking the device tree
+    /// IOKit class names are typically much shorter than device info strings
+    /// 128 bytes is sufficient for all known IOKit class names
+    const CLASS_NAME_BUFFER_SIZE = 128;
+    /// Minimum buffer clear size for efficiency (only clear what's needed)
+    const MIN_CLEAR_SIZE = 32;
+
+    const IOKitError = error{
+        ServiceNotFound,
+        PropertyNotFound,
+        InvalidProperty,
+        BufferTooSmall,
+        InvalidDevice,
+        TypeMismatch, // For when CF type validation fails
+        ResourceLeakRisk, // For when resources might not be properly released
+    };
+
+    /// Helper module for IOKit-specific operations
+    const IOKitHelper = struct {
+        const TempStringResult = struct {
+            buffer: [DEVICE_INFO_BUFFER_SIZE]u8 = undefined,
+            length: usize,
+
+            fn getSlice(self: *const @This()) []const u8 {
+                return self.buffer[0..self.length];
+            }
+        };
+
+        /// Retrieves a string property from an IOKit service object.
+        /// Returns the property value as a TempStringResult, or null if the property doesn't exist.
+        /// Includes proper type validation for safety.
+        fn getStringProperty(service: iokit.io_object_t, key: [*:0]const u8) ?IOKitHelper.TempStringResult {
+            if (comptime builtin.os.tag != .macos) return null;
+
+            const cf_key = iokit.CFStringCreateWithCString(iokit.kCFAllocatorDefault, key, iokit.kCFStringEncodingUTF8);
+            if (cf_key == null) return null;
+            defer iokit.CFRelease(cf_key);
+
+            const property = iokit.IORegistryEntryCreateCFProperty(service, cf_key, iokit.kCFAllocatorDefault, 0);
+            if (property == null) return null;
+            defer iokit.CFRelease(property);
+
+            // Validate that the property is actually a CFString before casting
+            if (iokit.CFGetTypeID(property) != iokit.CFStringGetTypeID()) {
+                return null;
+            }
+
+            const cf_string = @as(iokit.CFStringRef, @ptrCast(property));
+
+            // Get the string length and check bounds
+            const length = iokit.CFStringGetLength(cf_string);
+            if (length == 0) return null;
+
+            var result = IOKitHelper.TempStringResult{ .length = 0 };
+            const max_size = @min(result.buffer.len, @as(usize, @intCast(iokit.CFStringGetMaximumSizeForEncoding(length, iokit.kCFStringEncodingUTF8) + 1)));
+
+            if (iokit.CFStringGetCString(cf_string, &result.buffer, @intCast(max_size), iokit.kCFStringEncodingUTF8) == 0) {
+                return null;
+            }
+
+            // Use the actual string length for more reliable results
+            result.length = std.mem.len(@as([*:0]const u8, @ptrCast(&result.buffer)));
+            return result;
+        }
+
+        /// Retrieves a numeric property from an IOKit service object.
+        /// Returns the property value as a u16, or null if the property doesn't exist or is out of range.
+        /// Includes proper type validation for safety.
+        fn getNumberProperty(service: iokit.io_object_t, key: [*:0]const u8) ?u16 {
+            if (comptime builtin.os.tag != .macos) return null;
+
+            const cf_key = iokit.CFStringCreateWithCString(iokit.kCFAllocatorDefault, key, iokit.kCFStringEncodingUTF8);
+            if (cf_key == null) return null;
+            defer iokit.CFRelease(cf_key);
+
+            const property = iokit.IORegistryEntryCreateCFProperty(service, cf_key, iokit.kCFAllocatorDefault, 0);
+            if (property == null) return null;
+            defer iokit.CFRelease(property);
+
+            // Validate that the property is actually a CFNumber before casting
+            if (iokit.CFGetTypeID(property) != iokit.CFNumberGetTypeID()) {
+                return null;
+            }
+
+            const cf_number = @as(iokit.CFNumberRef, @ptrCast(property));
+            var value: i32 = 0;
+
+            if (iokit.CFNumberGetValue(cf_number, iokit.kCFNumberSInt32Type, &value) == 0) {
+                return null;
+            }
+
+            // Add bounds validation for safe casting
+            if (value < 0 or value > std.math.maxInt(u16)) return null;
+            return @intCast(value);
+        }
+
+        /// Helper struct for safe IOKit object resource management
+        const SafeIOObject = struct {
+            object: iokit.io_object_t,
+            should_release: bool,
+
+            fn init(obj: iokit.io_object_t, release: bool) @This() {
+                return .{ .object = obj, .should_release = release };
+            }
+
+            fn deinit(self: *@This()) void {
+                if (self.should_release and self.object != 0) {
+                    _ = iokit.IOObjectRelease(self.object);
+                    self.object = 0;
+                }
+            }
+
+            fn transfer(self: *@This()) iokit.io_object_t {
+                const obj = self.object;
+                self.should_release = false; // Transfer ownership
+                return obj;
+            }
+        };
+
+        /// Walks up the IOService tree to find a parent device of the specified type.
+        /// This is used to find USB parent devices for serial devices.
+        ///
+        /// IMPORTANT: The caller is responsible for releasing the returned device object
+        /// using IOObjectRelease() when done with it.
+        ///
+        /// Returns the parent device if found, null otherwise.
+        fn getParentDeviceByType(device: iokit.io_object_t, parent_type: [*:0]const u8) ?iokit.io_object_t {
+            if (comptime builtin.os.tag != .macos) return null;
+
+            // Walk up the IOService tree to find a parent of the specified type
+            var current = SafeIOObject.init(device, false); // Don't release the input device
+            defer current.deinit();
+
+            while (true) {
+                // Get the class name of the current device
+                var class_name: [CLASS_NAME_BUFFER_SIZE]u8 = undefined;
+                if (iokit.IOObjectGetClass(current.object, &class_name) != iokit.KERN_SUCCESS) {
+                    break;
+                }
+
+                // Check if this is the type we're looking for
+                if (std.mem.eql(u8, std.mem.span(@as([*:0]const u8, @ptrCast(&class_name))), std.mem.span(parent_type))) {
+                    // Found the parent - transfer ownership to caller
+                    return current.transfer();
+                }
+
+                // Get the parent
+                var parent: iokit.io_registry_entry_t = 0;
+                if (iokit.IORegistryEntryGetParentEntry(current.object, "IOService", &parent) != iokit.KERN_SUCCESS) {
+                    break;
+                }
+
+                // Replace current with parent (old current will be cleaned up by deinit if needed)
+                current.deinit();
+                current = SafeIOObject.init(parent, true); // This parent needs to be released
+            }
+
+            return null;
+        }
+    };
+
+    index: usize,
+    dir: std.fs.Dir,
+    iterator: std.fs.Dir.Iterator,
+
+    sys_buffer: [DEVICE_INFO_BUFFER_SIZE:0]u8 = undefined,
+    desc_buffer: [DEVICE_INFO_BUFFER_SIZE:0]u8 = undefined,
+    man_buffer: [DEVICE_INFO_BUFFER_SIZE:0]u8 = undefined,
+    serial_buffer: [DEVICE_INFO_BUFFER_SIZE:0]u8 = undefined,
+    hw_id_buffer: [DEVICE_INFO_BUFFER_SIZE:0]u8 = undefined,
+    port: PortInformation = undefined,
+
+    pub fn init() !Self {
+        var dir = try std.fs.cwd().openDir(root_dir, .{ .iterate = true });
+        errdefer dir.close();
+
+        return Self{ .index = 0, .dir = dir, .iterator = dir.iterate() };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.dir.close();
+        self.* = undefined;
+    }
+
+    /// Helper function for safe string copying to buffers
+    fn copyToBuffer(dest: []u8, src: []const u8) []const u8 {
+        const copy_len = @min(src.len, dest.len - 1);
+        @memcpy(dest[0..copy_len], src);
+        dest[copy_len] = 0;
+        return dest[0..copy_len];
+    }
+
+    /// Helper function for extracting USB properties safely
+    fn extractUSBProperty(usb_dev: iokit.io_object_t, property_name: [*:0]const u8, buffer: []u8, default_value: []const u8) []const u8 {
+        if (IOKitHelper.getStringProperty(usb_dev, property_name)) |property_result| {
+            const property_slice = property_result.getSlice();
+            return copyToBuffer(buffer, property_slice);
+        }
+        return copyToBuffer(buffer, default_value);
+    }
+
+    /// Efficiently clear only the beginning of buffers to reset them for reuse
+    fn clearUsedBuffers(self: *Self) void {
+        // Only clear the first few bytes to reset the buffers efficiently
+        @memset(self.sys_buffer[0..MIN_CLEAR_SIZE], 0);
+        @memset(self.desc_buffer[0..MIN_CLEAR_SIZE], 0);
+        @memset(self.man_buffer[0..MIN_CLEAR_SIZE], 0);
+        @memset(self.serial_buffer[0..MIN_CLEAR_SIZE], 0);
+        @memset(self.hw_id_buffer[0..MIN_CLEAR_SIZE], 0);
+    }
+
+    /// Returns port information for the next available serial device.
+    /// Note: The returned PortInformation contains slices that are only valid
+    /// until the next call to next() or deinit().
+    /// This is due to internal buffer reuse for memory efficiency.
+    pub fn next(self: *Self) !?PortInformation {
+        self.index += 1;
+
+        while (try self.iterator.next()) |entry| {
+            // Only process cu.* devices (callout devices)
+            if (!std.mem.startsWith(u8, entry.name, "cu.")) {
+                continue;
+            }
+
+            // Reset only the used portions of buffers for efficiency
+            self.clearUsedBuffers();
+
+            // Basic port information - use a more robust approach for system_location
+            const system_location_fmt = try std.fmt.bufPrint(&self.sys_buffer, "/dev/{s}", .{entry.name});
+            self.port.system_location = system_location_fmt;
+            self.port.friendly_name = entry.name;
+            self.port.port_name = entry.name;
+
+            // Use hw_id_buffer for hardware ID information
+            const hw_id = std.fmt.bufPrint(&self.hw_id_buffer, "macOS:{s}", .{entry.name}) catch "N/A";
+            self.port.hw_id = hw_id;
+
+            // Try to get real USB device information using IOKit
+            if (comptime builtin.os.tag == .macos) {
+                if (self.tryGetUSBInfoIOKit(entry.name)) |usb_info| {
+                    self.port.description = usb_info.description;
+                    self.port.manufacturer = usb_info.manufacturer;
+                    self.port.serial_number = usb_info.serial_number;
+                    self.port.vid = usb_info.vid;
+                    self.port.pid = usb_info.pid;
+                } else {
+                    // Fallback for non-USB devices or when USB info is not available
+                    self.port.description = self.parseDeviceDescription(entry.name);
+                    self.port.manufacturer = "Unknown";
+                    self.port.serial_number = "N/A";
+                    self.port.vid = 0;
+                    self.port.pid = 0;
+                }
+            } else {
+                // Fallback for non-macOS platforms (shouldn't happen)
+                self.port.description = self.parseDeviceDescription(entry.name);
+                self.port.manufacturer = "Unknown";
+                self.port.serial_number = "N/A";
+                self.port.vid = 0;
+                self.port.pid = 0;
+            }
+
+            return self.port;
+        }
+        return null;
+    }
+
+    const USBDeviceInfo = struct {
+        description: []const u8,
+        manufacturer: []const u8,
+        serial_number: []const u8,
+        vid: u16,
+        pid: u16,
+    };
+
+    /// Attempts to retrieve USB device information using IOKit.
+    /// Returns detailed USB information if the device is a USB serial device, null otherwise.
+    /// Note: The returned slices point to internal buffers and are only valid until the next call to next().
+    fn tryGetUSBInfoIOKit(self: *Self, device_name: []const u8) ?USBDeviceInfo {
+        if (comptime builtin.os.tag != .macos) return null;
+
+        // Create the device path with better error handling
+        var device_path_buffer: [512]u8 = undefined; // Increased buffer size
+        const device_path = std.fmt.bufPrint(&device_path_buffer, "/dev/{s}", .{device_name}) catch |err| {
+            // Log the error for debugging (in debug builds)
+            if (builtin.mode == .Debug) {
+                std.log.warn("Failed to format device path for '{s}': {}", .{ device_name, err });
+            }
+            return null;
+        };
+
+        // Find the IOSerialBSDClient that matches our device path
+        const matching_dict = iokit.IOServiceMatching("IOSerialBSDClient");
+        if (matching_dict == null) return null;
+
+        var iterator: iokit.io_iterator_t = 0;
+        const result = iokit.IOServiceGetMatchingServices(iokit.kIOMainPortDefault, matching_dict, &iterator);
+        if (result != iokit.KERN_SUCCESS) return null;
+        defer _ = iokit.IOObjectRelease(iterator);
+
+        var service: iokit.io_object_t = iokit.IOIteratorNext(iterator);
+        while (service != 0) {
+            // Check if this service matches our device path
+            if (IOKitHelper.getStringProperty(service, "IOCalloutDevice")) |callout_result| {
+                const callout_device = callout_result.getSlice();
+
+                if (std.mem.eql(u8, callout_device, device_path)) { // Try to find a USB parent device
+                    // First try IOUSBHostDevice (modern macOS), then IOUSBDevice (older macOS)
+                    var usb_device = IOKitHelper.getParentDeviceByType(service, "IOUSBHostDevice");
+                    if (usb_device == null) {
+                        usb_device = IOKitHelper.getParentDeviceByType(service, "IOUSBDevice");
+                    }
+
+                    if (usb_device) |usb_dev| {
+                        defer _ = iokit.IOObjectRelease(usb_dev);
+
+                        // Extract USB properties
+                        const vendor_id = IOKitHelper.getNumberProperty(usb_dev, "idVendor") orelse 0;
+                        const product_id = IOKitHelper.getNumberProperty(usb_dev, "idProduct") orelse 0;
+
+                        // Get USB strings using the helper function for consistency
+                        const manufacturer = extractUSBProperty(usb_dev, "USB Vendor Name", &self.man_buffer, "Unknown");
+                        const product = extractUSBProperty(usb_dev, "USB Product Name", &self.desc_buffer, "USB Serial Device");
+                        const serial = extractUSBProperty(usb_dev, "USB Serial Number", &self.serial_buffer, "N/A");
+
+                        _ = iokit.IOObjectRelease(service);
+                        return USBDeviceInfo{
+                            .description = product,
+                            .manufacturer = manufacturer,
+                            .serial_number = serial,
+                            .vid = vendor_id,
+                            .pid = product_id,
+                        };
+                    }
+
+                    // Found the matching service but no USB parent - it's not a USB device
+                    _ = iokit.IOObjectRelease(service);
+                    return null;
+                }
+            }
+
+            _ = iokit.IOObjectRelease(service);
+            service = iokit.IOIteratorNext(iterator);
+        }
+
+        return null;
+    }
+
+    /// Provides a reasonable device description based on device name patterns.
+    /// This is used as a fallback when IOKit USB information is not available.
+    fn parseDeviceDescription(self: *Self, device_name: []const u8) []const u8 {
+        // Device pattern matching table
+        const DevicePattern = struct {
+            patterns: []const []const u8,
+            description: []const u8,
+        };
+
+        const device_patterns = [_]DevicePattern{
+            .{ .patterns = &.{ "Bluetooth", "bluetooth" }, .description = "Bluetooth Serial Device" },
+            .{ .patterns = &.{"SLAB_USBtoUART"}, .description = "Silicon Labs USB to UART Bridge" },
+            .{ .patterns = &.{"wchusbserial"}, .description = "WCH USB Serial Device" },
+            .{ .patterns = &.{ "usb", "USB", "usbmodem", "usbserial" }, .description = "USB Serial Device" },
+        };
+
+        // Check each pattern group
+        for (device_patterns) |pattern_group| {
+            for (pattern_group.patterns) |pattern| {
+                if (std.mem.indexOf(u8, device_name, pattern) != null) {
+                    return copyToBuffer(&self.desc_buffer, pattern_group.description);
+                }
+            }
+        }
+
+        // Default fallback
+        return copyToBuffer(&self.desc_buffer, "Serial Device");
+    }
+};
 pub const Parity = enum(u8) {
     /// No parity bit is used
     none = 'N',
