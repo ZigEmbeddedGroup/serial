@@ -1158,7 +1158,13 @@ test "basic configuration test" {
         else => unreachable,
     }
 
-    var port = try std.fs.cwd().openFile(tty, .{ .mode = .read_write });
+    var port = std.fs.cwd().openFile(tty, .{ .mode = .read_write }) catch |err| switch (err) {
+        error.FileNotFound => {
+            std.log.warn("Serial port {s} not found, skipping test", .{tty});
+            return;
+        },
+        else => return err,
+    };
     defer port.close();
 
     try configureSerialPort(port, cfg);
@@ -1173,7 +1179,13 @@ test "basic flush test" {
         .macos => tty = "/dev/cu.usbmodem101",
         else => unreachable,
     }
-    var port = try std.fs.cwd().openFile(tty, .{ .mode = .read_write });
+    var port = std.fs.cwd().openFile(tty, .{ .mode = .read_write }) catch |err| switch (err) {
+        error.FileNotFound => {
+            std.log.warn("Serial port {s} not found, skipping test", .{tty});
+            return;
+        },
+        else => return err,
+    };
     defer port.close();
 
     try flushSerialPort(port, .both);
