@@ -21,11 +21,17 @@ pub fn main() !u8 {
         .handshake = .none,
     });
 
-    try serial.writer().writeAll("Hello, World!\r\n");
+    // NOTE: everything is written directly to the serial port so there is no
+    // need to flush
+
+    var writer = serial.writer(&.{});
+    var reader = serial.reader(&.{});
+
+    try writer.interface.writeAll("Hello, World!\r\n");
 
     while (true) {
-        const b = try serial.reader().readByte();
-        try serial.writer().writeByte(b);
+        const b = try reader.interface.takeByte();
+        try writer.interface.writeByte(b);
     }
 
     return 0;

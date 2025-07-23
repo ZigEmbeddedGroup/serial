@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const c = @cImport(@cInclude("termios.h"));
+const Io = std.Io;
 
 pub fn list() !PortIterator {
     return try PortIterator.init();
@@ -748,14 +749,18 @@ pub const SerialConfig = struct {
     /// Defines the handshake protocol used.
     handshake: Handshake = .none,
 
-    pub fn format(self: Self, fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = options;
-        _ = fmt;
-        return writer.print("{d}@{d}{c}{d}{s}", .{ self.baud_rate, @intFromEnum(self.word_size), @intFromEnum(self.parity), @intFromEnum(self.stop_bits), switch (self.handshake) {
-            .none => "",
-            .hardware => " RTS/CTS",
-            .software => " XON/XOFF",
-        } });
+    pub fn format(self: Self, writer: *Io.Writer) !void {
+        return writer.print("{d}@{d}{c}{d}{s}", .{
+            self.baud_rate,
+            @intFromEnum(self.word_size),
+            @intFromEnum(self.parity),
+            @intFromEnum(self.stop_bits),
+            switch (self.handshake) {
+                .none => "",
+                .hardware => " RTS/CTS",
+                .software => " XON/XOFF",
+            },
+        });
     }
 };
 
@@ -1188,7 +1193,7 @@ test "change control pins" {
 test "bufPrint tests" {
     var buf: [32]u8 = undefined;
 
-    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{f}", .{SerialConfig{
         .handshake = .software,
         .baud_rate = 115200,
         .parity = .none,
@@ -1196,7 +1201,7 @@ test "bufPrint tests" {
         .stop_bits = .one,
     }}), "115200@8N1 XON/XOFF"));
 
-    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{f}", .{SerialConfig{
         .handshake = .hardware,
         .baud_rate = 115200,
         .parity = .none,
@@ -1204,7 +1209,7 @@ test "bufPrint tests" {
         .stop_bits = .one,
     }}), "115200@8N1 RTS/CTS"));
 
-    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{f}", .{SerialConfig{
         .handshake = .none,
         .baud_rate = 115200,
         .parity = .none,
@@ -1212,7 +1217,7 @@ test "bufPrint tests" {
         .stop_bits = .one,
     }}), "115200@8N1"));
 
-    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{f}", .{SerialConfig{
         .handshake = .none,
         .baud_rate = 115200,
         .parity = .even,
@@ -1220,7 +1225,7 @@ test "bufPrint tests" {
         .stop_bits = .one,
     }}), "115200@8E1"));
 
-    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{f}", .{SerialConfig{
         .handshake = .none,
         .baud_rate = 115200,
         .parity = .odd,
@@ -1228,7 +1233,7 @@ test "bufPrint tests" {
         .stop_bits = .one,
     }}), "115200@8O1"));
 
-    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{f}", .{SerialConfig{
         .handshake = .none,
         .baud_rate = 115200,
         .parity = .space,
@@ -1236,7 +1241,7 @@ test "bufPrint tests" {
         .stop_bits = .one,
     }}), "115200@8S1"));
 
-    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{f}", .{SerialConfig{
         .handshake = .none,
         .baud_rate = 115200,
         .parity = .mark,
@@ -1244,7 +1249,7 @@ test "bufPrint tests" {
         .stop_bits = .one,
     }}), "115200@8M1"));
 
-    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{}", .{SerialConfig{
+    try std.testing.expect(std.mem.eql(u8, try std.fmt.bufPrint(&buf, "{f}", .{SerialConfig{
         .handshake = .none,
         .baud_rate = 9600,
         .parity = .mark,
