@@ -1,5 +1,4 @@
 const std = @import("std");
-const log = std.log.scoped(.serial_lib__build);
 
 const example_files = [_][]const u8{
     "echo",
