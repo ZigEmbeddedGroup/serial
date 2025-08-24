@@ -14,18 +14,25 @@ pub fn main() !u8 {
     defer serial.close();
 
     try zig_serial.configureSerialPort(serial, zig_serial.SerialConfig{
-        .baud_rate = 115200,
+        .baud_rate = 115_200,
         .word_size = .eight,
         .parity = .none,
         .stop_bits = .one,
         .handshake = .none,
     });
 
-    try serial.writer().writeAll("Hello, World!\r\n");
+    // NOTE: everything is written directly to the serial port so there is no
+    // need to flush (because there is no buffering).
+    var writer = serial.writer(&.{});
+
+    var r_buf: [128]u8 = undefined;
+    var reader = serial.reader(&r_buf);
+
+    try writer.interface.writeAll("Hello, World!\r\n");
 
     while (true) {
-        const b = try serial.reader().readByte();
-        try serial.writer().writeByte(b);
+        const b = try reader.interface.takeByte();
+        try writer.interface.writeByte(b);
     }
 
     return 0;

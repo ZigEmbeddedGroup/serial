@@ -14,6 +14,10 @@ Library for configuring and listing serial ports.
 - List available serial ports
 - API: supports Windows, Linux and Mac
 
+## What version of Zig to use
+
+Zig 0.15.1
+
 ## Example
 
 ```zig
