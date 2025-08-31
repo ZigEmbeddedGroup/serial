@@ -14,6 +14,12 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/serial.zig"),
     });
 
+    // Add platform-specific linking for macOS
+    if (target.result.os.tag == .macos) {
+        serial_mod.linkFramework("IOKit", .{});
+        serial_mod.linkFramework("CoreFoundation", .{});
+    }
+
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/serial.zig"),
@@ -21,6 +27,12 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+
+    // Add platform-specific linking for macOS
+    if (target.result.os.tag == .macos) {
+        unit_tests.linkFramework("IOKit");
+        unit_tests.linkFramework("CoreFoundation");
+    }
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
@@ -42,6 +54,13 @@ pub fn build(b: *std.Build) void {
             // port info only works on Windows!
             // TODO: Linux and MacOS port info support
             example.root_module.addImport("serial", serial_mod);
+
+            // Add platform-specific linking for macOS
+            if (target.result.os.tag == .macos) {
+                example.linkFramework("IOKit");
+                example.linkFramework("CoreFoundation");
+            }
+
             const install_example = b.addInstallArtifact(example, .{});
             example_step.dependOn(&example.step);
             example_step.dependOn(&install_example.step);
