@@ -93,10 +93,17 @@ const WindowsPortIterator = struct {
         self.data_size = 256;
 
         return switch (RegEnumValueA(self.key, self.index, &self.name, &self.name_size, null, null, &self.data, &self.data_size)) {
-            0 => SerialPortDescription{
-                .file_name = try std.fmt.bufPrint(&self.filepath_data, "\\\\.\\{s}", .{self.data[0 .. self.data_size - 1]}),
-                .display_name = self.data[0 .. self.data_size - 1],
-                .driver = self.name[0..self.name_size],
+            0 => ser_desc: {
+                // if zero-sentinel, drop it.
+                if (self.data[self.data_size - 1] == 0) {
+                    self.data_size -= 1;
+                }
+
+                break :ser_desc SerialPortDescription{
+                    .file_name = try std.fmt.bufPrint(&self.filepath_data, "\\\\.\\{s}", .{self.data[0..self.data_size]}),
+                    .display_name = self.data[0..self.data_size],
+                    .driver = self.name[0..self.name_size],
+                };
             },
             259 => null,
             else => error.WindowsError,
@@ -247,6 +254,10 @@ const WindowsInformationIterator = struct {
 
             // if this is valid, return now
             if (result == 0 and port_length > 0) {
+                // if zero-sentinel, drop it.
+                if (port_name[port_length - 1] == 0) {
+                    port_length -= 1;
+                }
                 return port_length;
             }
         }
