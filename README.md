@@ -11,6 +11,7 @@ Library for configuring and listing serial ports.
   - Handshake (none, hardware, software)
   - Byte Size (5, 6, 7, 8)
 - Flush serial port send/receive buffers
+- Query number of bytes in serial port send/receive buffers
 - List available serial ports
 - API: supports Windows, Linux and Mac
 
