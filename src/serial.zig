@@ -1015,9 +1015,69 @@ pub fn changeControlPins(port: std.fs.File, pins: ControlPins) !void {
                 return error.Unexpected;
         },
 
-        .macos => {},
-
         else => @compileError("changeControlPins not implemented for " ++ @tagName(builtin.os.tag)),
+    }
+}
+
+/// TODO: This struct should probably be added to the Zig standard library at std.os.windows
+const COMSTAT = extern struct {
+    status: packed struct(std.os.windows.DWORD) {
+        fCtsHold: u1,
+        fDsrHold: u1,
+        fRlsdHold: u1,
+        fXoffHold: u1,
+        fXoffSent: u1,
+        fEof: u1,
+        fTxim: u1,
+        fReserved: u25,
+    },
+    cbInQue: std.os.windows.DWORD,
+    cbOutQue: std.os.windows.DWORD,
+};
+
+extern "kernel32" fn ClearCommError(hFile: std.os.windows.HANDLE, lpErrors: *std.os.windows.DWORD, lpStat: *COMSTAT) std.os.windows.BOOL;
+
+/// Returns the number of bytes waiting in the receive buffer
+pub fn receiveBufferCount(port: std.fs.File) !usize {
+    switch (builtin.os.tag) {
+        .windows => {
+            var ret_error: std.os.windows.DWORD = 0;
+            var ret_comstat: COMSTAT = std.mem.zeroes(COMSTAT);
+            if (ClearCommError(port.handle, &ret_error, &ret_comstat) == 0)
+                return error.Unexpected;
+            return @intCast(ret_comstat.cbInQue);
+        },
+        .linux => {
+            // from /usr/include/asm-generic/ioctls.h
+            const FIONREAD = 0x541B;
+            var bytes_avail: usize = 0;
+            if (std.os.linux.ioctl(port.handle, FIONREAD, @intFromPtr(&bytes_avail)) != 0)
+                return error.Unexpected;
+            return bytes_avail;
+        },
+        else => @compileError("receiveBufferCount not implemented for " ++ @tagName(builtin.os.tag)),
+    }
+}
+
+/// Returns the number of bytes waiting in the transmit buffer
+pub fn transmitBufferCount(port: std.fs.File) !usize {
+    switch (builtin.os.tag) {
+        .windows => {
+            var ret_error: std.os.windows.DWORD = 0;
+            var ret_comstat: COMSTAT = std.mem.zeroes(COMSTAT);
+            if (ClearCommError(port.handle, &ret_error, &ret_comstat) == 0)
+                return error.Unexpected;
+            return @intCast(ret_comstat.cbOutQue);
+        },
+        .linux => {
+            // from /usr/include/asm-generic/ioctls.h
+            const TIOCOUTQ = 0x5411;
+            var bytes_avail: usize = 0;
+            if (std.os.linux.ioctl(port.handle, TIOCOUTQ, @intFromPtr(&bytes_avail)) != 0)
+                return error.Unexpected;
+            return bytes_avail;
+        },
+        else => @compileError("transmitBufferCount not implemented for " ++ @tagName(builtin.os.tag)),
     }
 }
 
@@ -1145,6 +1205,16 @@ test "iterate ports" {
     }
 }
 
+fn openTestSerialDeviceFile() !std.fs.File {
+    // if any, these will likely exist on a machine
+    return switch (builtin.os.tag) {
+        .windows => std.fs.cwd().openFile("\\\\.\\COM3", .{ .mode = .read_write }),
+        .linux => std.fs.cwd().openFile("/dev/ttyUSB0", .{ .mode = .read_write }),
+        .macos => std.fs.cwd().openFile("/dev/cu.usbmodem101", .{ .mode = .read_write }),
+        else => unreachable,
+    };
+}
+
 test "basic configuration test" {
     const cfg = SerialConfig{
         .handshake = .none,
@@ -1154,31 +1224,14 @@ test "basic configuration test" {
         .stop_bits = .one,
     };
 
-    var tty: []const u8 = undefined;
-
-    switch (builtin.os.tag) {
-        .windows => tty = "\\\\.\\COM3",
-        .linux => tty = "/dev/ttyUSB0",
-        .macos => tty = "/dev/cu.usbmodem101",
-        else => unreachable,
-    }
-
-    var port = try std.fs.cwd().openFile(tty, .{ .mode = .read_write });
+    var port = try openTestSerialDeviceFile();
     defer port.close();
 
     try configureSerialPort(port, cfg);
 }
 
 test "basic flush test" {
-    var tty: []const u8 = undefined;
-    // if any, these will likely exist on a machine
-    switch (builtin.os.tag) {
-        .windows => tty = "\\\\.\\COM3",
-        .linux => tty = "/dev/ttyUSB0",
-        .macos => tty = "/dev/cu.usbmodem101",
-        else => unreachable,
-    }
-    var port = try std.fs.cwd().openFile(tty, .{ .mode = .read_write });
+    var port = try openTestSerialDeviceFile();
     defer port.close();
 
     try flushSerialPort(port, .both);
@@ -1188,6 +1241,20 @@ test "basic flush test" {
 
 test "change control pins" {
     _ = changeControlPins;
+}
+
+test "receive buffer counts" {
+    var port = try openTestSerialDeviceFile();
+    defer port.close();
+    try flushSerialPort(port, .input);
+    try std.testing.expectEqual(0, try receiveBufferCount(port));
+}
+
+test "transmit buffer counts" {
+    var port = try openTestSerialDeviceFile();
+    defer port.close();
+    try flushSerialPort(port, .output);
+    try std.testing.expectEqual(0, try transmitBufferCount(port));
 }
 
 test "bufPrint tests" {
