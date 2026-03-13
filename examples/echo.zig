@@ -1,8 +1,9 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const zig_serial = @import("serial");
 
 pub fn main() !u8 {
-    const port_name = if (@import("builtin").os.tag == .windows) "\\\\.\\COM1" else "/dev/ttyUSB0";
+    const port_name = if (builtin.os.tag == .windows) "\\\\.\\COM1" else "/dev/ttyUSB0";
 
     var serial = std.fs.cwd().openFile(port_name, .{ .mode = .read_write }) catch |err| switch (err) {
         error.FileNotFound => {

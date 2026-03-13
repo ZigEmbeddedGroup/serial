@@ -1,6 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const c = @cImport(@cInclude("termios.h"));
+// note: inf: POSIX specific
+const c = switch (builtin.target.os.tag) {
+    .linux, .macos => @cImport({
+        @cInclude("termios.h");
+    }),
+    else => struct {},
+};
 const Io = std.Io;
 
 pub fn list() !PortIterator {
