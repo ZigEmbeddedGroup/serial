@@ -3,12 +3,21 @@ const builtin = @import("builtin");
 const c = @cImport(@cInclude("termios.h"));
 const Io = std.Io;
 
-pub fn list() !PortIterator {
-    return try PortIterator.init();
+pub fn list(io: Io) !PortIterator {
+    return try switch (builtin.os.tag) {
+        .windows => WindowsPortIterator.init(),
+        .linux => LinuxPortIterator.init(io),
+        .macos => DarwinPortIterator.init(io),
+        else => @compileError("OS is not supported for port iteration"),
+    };
 }
 
-pub fn list_info() !InformationIterator {
-    return try InformationIterator.init();
+pub fn list_info(io: Io) !InformationIterator {
+    return try switch (builtin.os.tag) {
+        .windows => WindowsInformationIterator.init(),
+        .linux => LinuxInformationIterator.init(io),
+        else => @compileError("OS is not supported for information iteration"),
+    };
 }
 
 pub const PortIterator = switch (builtin.os.tag) {
@@ -471,7 +480,7 @@ const LinuxPortIterator = struct {
 
     io: std.Io,
     dir: std.Io.Dir,
-    iterator: std.fs.Dir.Iterator,
+    iterator: std.Io.Dir.Iterator,
 
     full_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
     driver_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
@@ -494,7 +503,7 @@ const LinuxPortIterator = struct {
 
     pub fn next(self: *Self) !?SerialPortDescription {
         while (true) {
-            if (try self.iterator.next()) |entry| {
+            if (try self.iterator.next(self.io)) |entry| {
                 // not a dir => we don't care
                 var tty_dir = self.dir.openDir(self.io, entry.name, .{}) catch continue;
                 defer tty_dir.close(self.io);
@@ -538,7 +547,7 @@ const LinuxInformationIterator = struct {
     index: u8,
     io: std.Io,
     dir: std.Io.Dir,
-    iterator: std.fs.Dir.Iterator,
+    iterator: std.Io.Dir.Iterator,
 
     driver_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
     sys_buffer: [256:0]u8 = undefined,
@@ -561,7 +570,7 @@ const LinuxInformationIterator = struct {
 
     pub fn next(self: *Self) !?PortInformation {
         self.index += 1;
-        while (try self.iterator.next()) |entry| {
+        while (try self.iterator.next(self.io)) |entry| {
             @memset(&self.sys_buffer, 0);
             @memset(&self.desc_buffer, 0);
             @memset(&self.man_buffer, 0);
@@ -651,7 +660,7 @@ const DarwinPortIterator = struct {
 
     io: std.Io,
     dir: std.Io.Dir,
-    iterator: std.fs.Dir.Iterator,
+    iterator: std.Io.Dir.Iterator,
 
     full_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
     driver_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
