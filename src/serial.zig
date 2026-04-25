@@ -477,7 +477,7 @@ const LinuxPortIterator = struct {
     driver_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
 
     pub fn init(io: std.Io) !Self {
-        var dir = try std.Io.Dir.cwd().openDir(io, root_dir, .{ .iterate = true });
+        var dir = try std.Io.Dir.openDirAbsolute(io, root_dir, .{ .iterate = true });
         errdefer dir.close(io);
 
         return Self{
@@ -548,7 +548,7 @@ const LinuxInformationIterator = struct {
     port: PortInformation = undefined,
 
     pub fn init(io: std.Io) !Self {
-        var dir = try std.Io.Dir.cwd().openDir(io, root_dir, .{ .iterate = true });
+        var dir = try std.Io.Dir.openDirAbsolute(io, root_dir, .{ .iterate = true });
         errdefer dir.close(io);
 
         return Self{ .index = 0, .io = io, .dir = dir, .iterator = dir.iterate() };
@@ -608,7 +608,7 @@ const LinuxInformationIterator = struct {
                 return self.port;
             }
 
-            var data_dir = std.Io.Dir.openDirAbsolute(self.io, device_path, .{}) catch continue;
+            var data_dir = std.Io.Dir.openDirAbsolute(self.io, self.driver_path_buffer[0..device_path], .{}) catch continue;
             defer data_dir.close(self.io);
             var tmp: [4]u8 = undefined;
             {
@@ -657,7 +657,7 @@ const DarwinPortIterator = struct {
     driver_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
 
     pub fn init(io: std.Io) !Self {
-        var dir = try std.Io.Dir.cwd().openDir(io, root_dir, .{ .iterate = true });
+        var dir = try std.Io.Dir.openDirAbsolute(io, root_dir, .{ .iterate = true });
         errdefer dir.close();
 
         return Self{
@@ -1171,7 +1171,7 @@ test "basic configuration test" {
 
     var threaded = Io.Threaded.init_single_threaded;
     const io = threaded.io();
-    var port = try std.Io.Dir.cwd().openFile(io, tty, .{ .mode = .read_write });
+    var port = try std.Io.Dir.openFileAbsolute(io, tty, .{ .mode = .read_write });
     defer port.close(io);
 
     try configureSerialPort(port, cfg);
@@ -1188,7 +1188,7 @@ test "basic flush test" {
     }
     var threaded = Io.Threaded.init_single_threaded;
     const io = threaded.io();
-    var port = try std.Io.Dir.cwd().openFile(io, tty, .{ .mode = .read_write });
+    var port = try std.Io.Dir.openFileAbsolute(io, tty, .{ .mode = .read_write });
     defer port.close(io);
 
     try flushSerialPort(port, .both);

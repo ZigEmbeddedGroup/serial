@@ -4,7 +4,7 @@ const zig_serial = @import("serial");
 pub fn main(init: std.process.Init) !u8 {
     const port_name = if (@import("builtin").os.tag == .windows) "\\\\.\\COM1" else "/dev/ttyUSB0";
 
-    var serial = std.Io.Dir.cwd().openFile(init.io, port_name, .{ .mode = .read_write }) catch |err| switch (err) {
+    var serial = std.Io.Dir.openFileAbsolute(init.io, port_name, .{ .mode = .read_write }) catch |err| switch (err) {
         error.FileNotFound => {
             std.debug.print("Invalid config: the serial port '{s}' does not exist.\n", .{port_name});
             return 1;
