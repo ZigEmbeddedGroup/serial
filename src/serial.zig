@@ -514,7 +514,7 @@ const LinuxPortIterator = struct {
                 defer device_dir.close(self.io);
 
                 // We need the symlink for "driver"
-                const link = device_dir.readLink(self.io, "driver", &self.driver_path_buffer) catch continue;
+                const link_len = device_dir.readLink(self.io, "driver", &self.driver_path_buffer) catch continue;
 
                 // full_path_buffer
                 // driver_path_buffer
@@ -529,7 +529,7 @@ const LinuxPortIterator = struct {
                 return SerialPortDescription{
                     .file_name = path,
                     .display_name = path,
-                    .driver = std.fs.path.basename(link),
+                    .driver = std.fs.path.basename(self.driver_path_buffer[0..link_len]),
                 };
             } else {
                 return null;
@@ -598,15 +598,15 @@ const LinuxInformationIterator = struct {
                 self.port.hw_id = "N/A";
             }
             // We need the symlink for "driver"
-            const subsystem_path = device_dir.readLink(self.io, "subsystem", &self.driver_path_buffer) catch continue;
-            const subsystem = std.fs.path.basename(subsystem_path);
-            var device_path: []u8 = undefined;
+            const subsystem_link_len = device_dir.readLink(self.io, "subsystem", &self.driver_path_buffer) catch continue;
+            const subsystem = std.fs.path.basename(self.driver_path_buffer[0..subsystem_link_len]);
+            var device_path_len: usize = undefined;
             if (std.mem.eql(u8, subsystem, "usb") == true) {
                 const parent = try device_dir.openDir(self.io, "../", .{});
-                device_path = try parent.realPath(self.io, &self.driver_path_buffer);
+                device_path_len = try parent.realPath(self.io, &self.driver_path_buffer);
             } else if (std.mem.eql(u8, subsystem, "usb-serial") == true) {
                 const parent = try device_dir.openDir(self.io, "../../", .{});
-                device_path = try parent.realPath(self.io, &self.driver_path_buffer);
+                device_path_len = try parent.realPath(self.io, &self.driver_path_buffer);
             } else {
                 //must be remove to manage other device type
                 self.port.description = "Not Managed";
@@ -617,7 +617,7 @@ const LinuxInformationIterator = struct {
                 return self.port;
             }
 
-            var data_dir = std.Io.Dir.openDirAbsolute(self.io, self.driver_path_buffer[0..device_path], .{}) catch continue;
+            var data_dir = std.Io.Dir.openDirAbsolute(self.io, self.driver_path_buffer[0..device_path_len], .{}) catch continue;
             defer data_dir.close(self.io);
             var tmp: [4]u8 = undefined;
             {
