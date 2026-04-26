@@ -3,12 +3,21 @@ const builtin = @import("builtin");
 const c = @cImport(@cInclude("termios.h"));
 const Io = std.Io;
 
-pub fn list() !PortIterator {
-    return try PortIterator.init();
+pub fn list(io: Io) !PortIterator {
+    return try switch (builtin.os.tag) {
+        .windows => WindowsPortIterator.init(),
+        .linux => LinuxPortIterator.init(io),
+        .macos => DarwinPortIterator.init(io),
+        else => @compileError("OS is not supported for port iteration"),
+    };
 }
 
-pub fn list_info() !InformationIterator {
-    return try InformationIterator.init();
+pub fn list_info(io: Io) !InformationIterator {
+    return try switch (builtin.os.tag) {
+        .windows => WindowsInformationIterator.init(),
+        .linux => LinuxInformationIterator.init(io),
+        else => @compileError("OS is not supported for information iteration"),
+    };
 }
 
 pub const PortIterator = switch (builtin.os.tag) {
@@ -471,13 +480,13 @@ const LinuxPortIterator = struct {
 
     io: std.Io,
     dir: std.Io.Dir,
-    iterator: std.fs.Dir.Iterator,
+    iterator: std.Io.Dir.Iterator,
 
     full_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
     driver_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
 
     pub fn init(io: std.Io) !Self {
-        var dir = try std.Io.Dir.cwd().openDir(io, root_dir, .{ .iterate = true });
+        var dir = try std.Io.Dir.openDirAbsolute(io, root_dir, .{ .iterate = true });
         errdefer dir.close(io);
 
         return Self{
@@ -494,7 +503,7 @@ const LinuxPortIterator = struct {
 
     pub fn next(self: *Self) !?SerialPortDescription {
         while (true) {
-            if (try self.iterator.next()) |entry| {
+            if (try self.iterator.next(self.io)) |entry| {
                 // not a dir => we don't care
                 var tty_dir = self.dir.openDir(self.io, entry.name, .{}) catch continue;
                 defer tty_dir.close(self.io);
@@ -505,7 +514,7 @@ const LinuxPortIterator = struct {
                 defer device_dir.close(self.io);
 
                 // We need the symlink for "driver"
-                const link = device_dir.readLink(self.io, "driver", &self.driver_path_buffer) catch continue;
+                const link_len = device_dir.readLink(self.io, "driver", &self.driver_path_buffer) catch continue;
 
                 // full_path_buffer
                 // driver_path_buffer
@@ -520,7 +529,7 @@ const LinuxPortIterator = struct {
                 return SerialPortDescription{
                     .file_name = path,
                     .display_name = path,
-                    .driver = std.fs.path.basename(link),
+                    .driver = std.fs.path.basename(self.driver_path_buffer[0..link_len]),
                 };
             } else {
                 return null;
@@ -538,7 +547,7 @@ const LinuxInformationIterator = struct {
     index: u8,
     io: std.Io,
     dir: std.Io.Dir,
-    iterator: std.fs.Dir.Iterator,
+    iterator: std.Io.Dir.Iterator,
 
     driver_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
     sys_buffer: [256:0]u8 = undefined,
@@ -548,7 +557,7 @@ const LinuxInformationIterator = struct {
     port: PortInformation = undefined,
 
     pub fn init(io: std.Io) !Self {
-        var dir = try std.Io.Dir.cwd().openDir(io, root_dir, .{ .iterate = true });
+        var dir = try std.Io.Dir.openDirAbsolute(io, root_dir, .{ .iterate = true });
         errdefer dir.close(io);
 
         return Self{ .index = 0, .io = io, .dir = dir, .iterator = dir.iterate() };
@@ -561,7 +570,7 @@ const LinuxInformationIterator = struct {
 
     pub fn next(self: *Self) !?PortInformation {
         self.index += 1;
-        while (try self.iterator.next()) |entry| {
+        while (try self.iterator.next(self.io)) |entry| {
             @memset(&self.sys_buffer, 0);
             @memset(&self.desc_buffer, 0);
             @memset(&self.man_buffer, 0);
@@ -589,15 +598,15 @@ const LinuxInformationIterator = struct {
                 self.port.hw_id = "N/A";
             }
             // We need the symlink for "driver"
-            const subsystem_path = device_dir.readLink(self.io, "subsystem", &self.driver_path_buffer) catch continue;
-            const subsystem = std.fs.path.basename(subsystem_path);
-            var device_path: []u8 = undefined;
+            const subsystem_link_len = device_dir.readLink(self.io, "subsystem", &self.driver_path_buffer) catch continue;
+            const subsystem = std.fs.path.basename(self.driver_path_buffer[0..subsystem_link_len]);
+            var device_path_len: usize = undefined;
             if (std.mem.eql(u8, subsystem, "usb") == true) {
                 const parent = try device_dir.openDir(self.io, "../", .{});
-                device_path = try parent.realPath(self.io, &self.driver_path_buffer);
+                device_path_len = try parent.realPath(self.io, &self.driver_path_buffer);
             } else if (std.mem.eql(u8, subsystem, "usb-serial") == true) {
                 const parent = try device_dir.openDir(self.io, "../../", .{});
-                device_path = try parent.realPath(self.io, &self.driver_path_buffer);
+                device_path_len = try parent.realPath(self.io, &self.driver_path_buffer);
             } else {
                 //must be remove to manage other device type
                 self.port.description = "Not Managed";
@@ -608,7 +617,7 @@ const LinuxInformationIterator = struct {
                 return self.port;
             }
 
-            var data_dir = std.Io.Dir.openDirAbsolute(self.io, device_path, .{}) catch continue;
+            var data_dir = std.Io.Dir.openDirAbsolute(self.io, self.driver_path_buffer[0..device_path_len], .{}) catch continue;
             defer data_dir.close(self.io);
             var tmp: [4]u8 = undefined;
             {
@@ -651,13 +660,13 @@ const DarwinPortIterator = struct {
 
     io: std.Io,
     dir: std.Io.Dir,
-    iterator: std.fs.Dir.Iterator,
+    iterator: std.Io.Dir.Iterator,
 
     full_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
     driver_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
 
     pub fn init(io: std.Io) !Self {
-        var dir = try std.Io.Dir.cwd().openDir(io, root_dir, .{ .iterate = true });
+        var dir = try std.Io.Dir.openDirAbsolute(io, root_dir, .{ .iterate = true });
         errdefer dir.close();
 
         return Self{
@@ -1171,7 +1180,7 @@ test "basic configuration test" {
 
     var threaded = Io.Threaded.init_single_threaded;
     const io = threaded.io();
-    var port = try std.Io.Dir.cwd().openFile(io, tty, .{ .mode = .read_write });
+    var port = try std.Io.Dir.openFileAbsolute(io, tty, .{ .mode = .read_write });
     defer port.close(io);
 
     try configureSerialPort(port, cfg);
@@ -1188,7 +1197,7 @@ test "basic flush test" {
     }
     var threaded = Io.Threaded.init_single_threaded;
     const io = threaded.io();
-    var port = try std.Io.Dir.cwd().openFile(io, tty, .{ .mode = .read_write });
+    var port = try std.Io.Dir.openFileAbsolute(io, tty, .{ .mode = .read_write });
     defer port.close(io);
 
     try flushSerialPort(port, .both);

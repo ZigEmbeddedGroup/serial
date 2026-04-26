@@ -1,8 +1,8 @@
 const std = @import("std");
 const zig_serial = @import("serial");
 
-pub fn main() !u8 {
-    var iterator = try zig_serial.list_info();
+pub fn main(init: std.process.Init) !u8 {
+    var iterator = try zig_serial.list_info(init.io);
     defer iterator.deinit();
 
     while (try iterator.next()) |info| {
