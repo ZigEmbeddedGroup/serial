@@ -1178,7 +1178,10 @@ test "basic configuration test" {
         else => unreachable,
     }
 
-    var port = try std.Io.Dir.openFileAbsolute(std.testing.io, tty, .{ .mode = .read_write });
+    var port = std.Io.Dir.openFileAbsolute(std.testing.io, tty, .{ .mode = .read_write }) catch |err| switch(err) {
+        error.FileNotFound => return error.ZigSkipTest,
+        else => |e| return e,
+    }; 
     defer port.close(std.testing.io);
 
     try configureSerialPort(port, cfg);
@@ -1193,7 +1196,10 @@ test "basic flush test" {
         .macos => tty = "/dev/cu.usbmodem101",
         else => unreachable,
     }
-    var port = try std.Io.Dir.openFileAbsolute(std.testing.io, tty, .{ .mode = .read_write });
+    var port = std.Io.Dir.openFileAbsolute(std.testing.io, tty, .{ .mode = .read_write }) catch |err| switch(err) {
+        error.FileNotFound => return error.ZigSkipTest,
+        else => |e| return e,
+    };
     defer port.close(std.testing.io);
 
     try flushSerialPort(port, .both);
