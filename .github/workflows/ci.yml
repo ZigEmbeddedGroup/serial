@@ -19,11 +19,11 @@ jobs:
       - name: Build
         run: zig build
 
-      - name: Run tests
-        run: zig build test
-
       - name: Build examples
         run: zig build examples
 
       - name: Build docs
         run: zig build docs
+
+      - name: Run tests
+        run: zig build test
