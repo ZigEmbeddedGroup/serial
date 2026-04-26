@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
+      - name: Build
+        run: zig build
+
+      - name: Build examples
+        run: zig build examples
+
+      - name: Build docs
+        run: zig build docs
+
+      - name: Run tests
+        run: zig build test

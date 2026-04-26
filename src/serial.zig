@@ -1153,7 +1153,7 @@ extern "kernel32" fn GetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) cal
 extern "kernel32" fn SetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(.winapi) std.os.windows.BOOL;
 
 test "iterate ports" {
-    var it = try list();
+    var it = try list(std.testing.io);
     while (try it.next()) |port| {
         _ = port;
         // std.debug.print("{s} (file: {s}, driver: {s})\n", .{ port.display_name, port.file_name, port.driver });
@@ -1178,10 +1178,11 @@ test "basic configuration test" {
         else => unreachable,
     }
 
-    var threaded = Io.Threaded.init_single_threaded;
-    const io = threaded.io();
-    var port = try std.Io.Dir.openFileAbsolute(io, tty, .{ .mode = .read_write });
-    defer port.close(io);
+    var port = std.Io.Dir.openFileAbsolute(std.testing.io, tty, .{ .mode = .read_write }) catch |err| switch(err) {
+        error.FileNotFound => return error.SkipZigTest,
+        else => |e| return e,
+    }; 
+    defer port.close(std.testing.io);
 
     try configureSerialPort(port, cfg);
 }
@@ -1195,10 +1196,11 @@ test "basic flush test" {
         .macos => tty = "/dev/cu.usbmodem101",
         else => unreachable,
     }
-    var threaded = Io.Threaded.init_single_threaded;
-    const io = threaded.io();
-    var port = try std.Io.Dir.openFileAbsolute(io, tty, .{ .mode = .read_write });
-    defer port.close(io);
+    var port = std.Io.Dir.openFileAbsolute(std.testing.io, tty, .{ .mode = .read_write }) catch |err| switch(err) {
+        error.FileNotFound => return error.SkipZigTest,
+        else => |e| return e,
+    };
+    defer port.close(std.testing.io);
 
     try flushSerialPort(port, .both);
     try flushSerialPort(port, .input);
