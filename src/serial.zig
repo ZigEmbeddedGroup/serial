@@ -1179,7 +1179,7 @@ test "basic configuration test" {
     }
 
     var port = std.Io.Dir.openFileAbsolute(std.testing.io, tty, .{ .mode = .read_write }) catch |err| switch(err) {
-        error.FileNotFound => return error.ZigSkipTest,
+        error.FileNotFound => return error.SkipZigTest,
         else => |e| return e,
     }; 
     defer port.close(std.testing.io);
@@ -1197,7 +1197,7 @@ test "basic flush test" {
         else => unreachable,
     }
     var port = std.Io.Dir.openFileAbsolute(std.testing.io, tty, .{ .mode = .read_write }) catch |err| switch(err) {
-        error.FileNotFound => return error.ZigSkipTest,
+        error.FileNotFound => return error.SkipZigTest,
         else => |e| return e,
     };
     defer port.close(std.testing.io);
