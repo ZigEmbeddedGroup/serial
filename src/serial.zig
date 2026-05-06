@@ -206,13 +206,14 @@ const WindowsInformationIterator = struct {
             self.device_info_set,
             &device_info_data,
             @ptrCast(&self.hw_id),
-            255,
+            self.hw_id.len - 1,
             null,
         ) == std.os.windows.BOOL.TRUE) {
             length = @as(u32, @truncate(std.mem.indexOfSentinel(u8, 0, &self.hw_id)));
-            info.hw_id = self.hw_id[0..length];
+            const id = self.hw_id[0..length];
+            info.hw_id = id;
 
-            length = parseSerialNumber(&self.hw_id, &self.serial_buffer) catch 0;
+            length = parseSerialNumber(id, &self.serial_buffer) catch 0;
             if (length == 0) {
                 length = getParentSerialNumber(device_info_data.devInst, &self.hw_id, &self.serial_buffer) catch 0;
             }
@@ -302,12 +303,14 @@ const WindowsInformationIterator = struct {
                 var local_buffer: [256:0]u8 = std.mem.zeroes([256:0]u8);
 
                 if (CM_Get_Parent(&parent_id, child_inst, 0) != 0) return error.WindowsError;
-                if (CM_Get_Device_IDA(parent_id, @ptrCast(&local_buffer), 256, 0) != 0) return error.WindowsError;
+                if (CM_Get_Device_IDA(parent_id, @ptrCast(&local_buffer), local_buffer.len, 0) != 0) return error.WindowsError;
                 defer child_inst = parent_id;
 
-                if (!std.mem.containsAtLeast(u8, local_buffer[0..255], 1, vidpid_slice)) continue;
+                const hwidlen = std.mem.indexOfSentinel(u8, 0, &local_buffer);
+                const hwid = local_buffer[0..hwidlen];
+                if (!std.mem.containsAtLeast(u8, hwid, 1, vidpid_slice)) continue;
 
-                const length = try parseSerialNumber(local_buffer[0..255], serial_number);
+                const length = try parseSerialNumber(hwid, serial_number);
                 if (length > 0) return length;
             }
         }
@@ -764,6 +767,9 @@ pub const SerialConfig = struct {
     /// Defines the handshake protocol used.
     handshake: Handshake = .none,
 
+    /// Timeout in milliseconds for read operations.
+    timeout_ms: ?u32 = null,
+
     pub fn format(self: Self, writer: *Io.Writer) !void {
         return writer.print("{d}@{d}{c}{d}{s}", .{
             self.baud_rate,
@@ -782,11 +788,6 @@ pub const SerialConfig = struct {
 const CBAUD = 0o000000010017; //Baud speed mask (not in POSIX).
 const CMSPAR = 0o010000000000;
 const CRTSCTS = 0o020000000000;
-
-const VTIME = 5;
-const VMIN = 6;
-const VSTART = 8;
-const VSTOP = 9;
 
 /// This function configures a serial port with the given config.
 /// `port` is an already opened serial port, on windows these
@@ -837,6 +838,13 @@ pub fn configureSerialPort(port: std.Io.File, config: SerialConfig) !void {
 
             if (SetCommState(port.handle, &dcb) == std.os.windows.BOOL.FALSE)
                 return error.WindowsError;
+
+            if (config.timeout_ms) |timeout| {
+            	var timeouts = COMMTIMEOUTS{};
+                timeouts.ReadTotalTimeoutConstant = timeout;
+	            if (SetCommTimeouts(port.handle, &timeouts) == 0)
+	                return error.WindowsError;
+            }
         },
         .linux, .macos => |tag| {
             var settings = try std.posix.tcgetattr(port.handle);
@@ -913,10 +921,19 @@ pub fn configureSerialPort(port: std.Io.File, config: SerialConfig) !void {
             settings.oflag = .{};
             settings.lflag = .{};
 
-            settings.cc[VMIN] = 1;
-            settings.cc[VSTOP] = 0x13; // XOFF
-            settings.cc[VSTART] = 0x11; // XON
-            settings.cc[VTIME] = 0;
+            settings.cc[c.VSTOP] = 0x13; // XOFF
+            settings.cc[c.VSTART] = 0x11; // XON
+            if (config.timeout_ms) |timeout| {
+	            const tenths = timeout / 100;
+	            if(tenths == 0) return error.UnsupportedTimeout;
+	            settings.cc[c.VTIME] = if(tenths < 256) @intCast(tenths) else return error.UnsupportedTimeout;
+				settings.cc[c.VMIN] = 0;
+            }
+            else {
+
+                settings.cc[c.VTIME] = 0;
+                settings.cc[c.VMIN] = 1;
+            }
 
             try std.posix.tcsetattr(port.handle, .NOW, settings);
 
@@ -1151,6 +1168,15 @@ const DCB = extern struct {
 
 extern "kernel32" fn GetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(.winapi) std.os.windows.BOOL;
 extern "kernel32" fn SetCommState(hFile: std.os.windows.HANDLE, lpDCB: *DCB) callconv(.winapi) std.os.windows.BOOL;
+
+const COMMTIMEOUTS = extern struct {
+    ReadIntervalTimeout: std.os.windows.DWORD = std.math.maxInt(std.os.windows.DWORD),
+    ReadTotalTimeoutMultiplier: std.os.windows.DWORD = 0,
+    ReadTotalTimeoutConstant: std.os.windows.DWORD = 0,
+    WriteTotalTimeoutMultiplier: std.os.windows.DWORD = 0,
+    WriteTotalTimeoutConstant: std.os.windows.DWORD = 0,
+};
+extern "kernel32" fn SetCommTimeouts(in_hFile: std.os.windows.HANDLE, in_lpCommTimeouts: *COMMTIMEOUTS) callconv(.winapi) std.os.windows.BOOL;
 
 test "iterate ports" {
     var it = try list(std.testing.io);

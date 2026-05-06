@@ -10,6 +10,7 @@ Library for configuring and listing serial ports.
   - Stop Bits (one, two)
   - Handshake (none, hardware, software)
   - Byte Size (5, 6, 7, 8)
+  - Receive timeout (optional)
 - Flush serial port send/receive buffers
 - List available serial ports
 - API: supports Windows, Linux and Mac
