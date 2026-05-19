@@ -989,11 +989,11 @@ pub fn changeControlPins(port: std.Io.File, pins: ControlPins) !void {
             const SETRTS = 3;
 
             if (pins.dtr) |dtr| {
-                if (EscapeCommFunction(port.handle, if (dtr) SETDTR else CLRDTR) == 0)
+                if (EscapeCommFunction(port.handle, if (dtr) SETDTR else CLRDTR) == .FALSE)
                     return error.WindowsError;
             }
             if (pins.rts) |rts| {
-                if (EscapeCommFunction(port.handle, if (rts) SETRTS else CLRRTS) == 0)
+                if (EscapeCommFunction(port.handle, if (rts) SETRTS else CLRRTS) == .FALSE)
                     return error.WindowsError;
             }
         },
@@ -1058,7 +1058,7 @@ pub fn receiveBufferCount(port: std.Io.File) !usize {
         .windows => {
             var ret_error: std.os.windows.DWORD = 0;
             var ret_comstat: COMSTAT = std.mem.zeroes(COMSTAT);
-            if (ClearCommError(port.handle, &ret_error, &ret_comstat) == 0)
+            if (ClearCommError(port.handle, &ret_error, &ret_comstat) == .FALSE)
                 return error.Unexpected;
             return @intCast(ret_comstat.cbInQue);
         },
@@ -1080,7 +1080,7 @@ pub fn transmitBufferCount(port: std.Io.File) !usize {
         .windows => {
             var ret_error: std.os.windows.DWORD = 0;
             var ret_comstat: COMSTAT = std.mem.zeroes(COMSTAT);
-            if (ClearCommError(port.handle, &ret_error, &ret_comstat) == 0)
+            if (ClearCommError(port.handle, &ret_error, &ret_comstat) == .FALSE)
                 return error.Unexpected;
             return @intCast(ret_comstat.cbOutQue);
         },
