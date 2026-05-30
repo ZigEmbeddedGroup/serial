@@ -965,7 +965,7 @@ pub fn flushSerialPort(port: std.Io.File, flush: Flush) !void {
             const TCIFLUSH = 1;
             const TCOFLUSH = 2;
             const TCIOFLUSH = 3;
-            const tcflush = @extern(fn (c_int, c_int) c_int, .{ .name = "tcflush" });
+            const tcflush = @extern(*const fn (c_int, c_int) callconv(.c) c_int, .{ .name = "tcflush" });
             const mode: c_int = switch (flush) {
                 .input => TCIFLUSH,
                 .output => TCOFLUSH,
