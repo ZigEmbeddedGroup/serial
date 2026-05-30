@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-//const c = @import("c");
 const Io = std.Io;
 
 pub fn list(io: Io) !PortIterator {
