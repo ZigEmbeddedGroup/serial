@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const c = @cImport(@cInclude("termios.h"));
+//const c = @import("c");
 const Io = std.Io;
 
 pub fn list(io: Io) !PortIterator {
@@ -963,12 +963,16 @@ pub fn flushSerialPort(port: std.Io.File, flush: Flush) !void {
                 return error.FlushError;
         },
         .macos => {
+            const TCIFLUSH = 1;
+            const TCOFLUSH = 2;
+            const TCIOFLUSH = 3;
+            const tcflush = @extern(fn (c_int, c_int) c_int, .{ .name = "tcflush" });
             const mode: c_int = switch (flush) {
-                .input => c.TCIFLUSH,
-                .output => c.TCOFLUSH,
-                .both => c.TCIOFLUSH,
+                .input => TCIFLUSH,
+                .output => TCOFLUSH,
+                .both => TCIOFLUSH,
             };
-            if (0 != c.tcflush(port.handle, mode))
+            if (0 != tcflush(port.handle, mode))
                 return error.FlushError;
         },
         else => @compileError("unsupported OS, please implement!"),
@@ -1178,10 +1182,10 @@ test "basic configuration test" {
         else => unreachable,
     }
 
-    var port = std.Io.Dir.openFileAbsolute(std.testing.io, tty, .{ .mode = .read_write }) catch |err| switch(err) {
+    var port = std.Io.Dir.openFileAbsolute(std.testing.io, tty, .{ .mode = .read_write }) catch |err| switch (err) {
         error.FileNotFound => return error.SkipZigTest,
         else => |e| return e,
-    }; 
+    };
     defer port.close(std.testing.io);
 
     try configureSerialPort(port, cfg);
@@ -1196,7 +1200,7 @@ test "basic flush test" {
         .macos => tty = "/dev/cu.usbmodem101",
         else => unreachable,
     }
-    var port = std.Io.Dir.openFileAbsolute(std.testing.io, tty, .{ .mode = .read_write }) catch |err| switch(err) {
+    var port = std.Io.Dir.openFileAbsolute(std.testing.io, tty, .{ .mode = .read_write }) catch |err| switch (err) {
         error.FileNotFound => return error.SkipZigTest,
         else => |e| return e,
     };
