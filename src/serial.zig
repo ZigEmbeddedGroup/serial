@@ -931,6 +931,23 @@ pub fn configureSerialPort(port: std.Io.File, config: SerialConfig) !void {
     }
 }
 
+/// Read the number input byte available from port `port`
+/// Only work on linux
+pub fn InWaintingSerialPort(port: std.Io.File) !usize {
+    switch (builtin.os.tag) {
+        .linux => {
+            var remaining: c_int = 0;
+            const FIONREAD: u32 = 0x541B; // same as TIOCINQ
+            if (std.os.linux.ioctl(port.handle, FIONREAD, @intFromPtr(&remaining)) == -1) {
+                // if (std.c.ioctl(port.handle, @bitCast(FIONREAD), &remaining) == -1) {
+                return error.InWaitingError;
+            }
+            return @intCast(remaining);
+        },
+        else => @compileError("unsupported OS, please implement!"),
+    }
+}
+
 const Flush = enum {
     input,
     output,
