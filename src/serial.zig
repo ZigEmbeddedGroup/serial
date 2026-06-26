@@ -727,13 +727,20 @@ pub const StopBits = enum(u2) {
     two = 2,
 };
 
-pub const Handshake = enum {
-    /// No handshake is used
-    none,
+pub const Handshake = packed struct(u2) {
     /// XON-XOFF software handshake is used.
-    software,
+    use_software: bool = false,
     /// Hardware handshake with RTS/CTS is used.
-    hardware,
+    use_hardware: bool = false,
+
+    pub const none = @This(){};
+    pub const software = @This(){ .use_software = true };
+    pub const hardware = @This(){ .use_hardware = true };
+    pub const both = @This(){ .use_software = true, .use_hardware = true };
+
+    pub fn isNone(this: @This()) bool {
+        return !(this.use_software or this.use_hardware);
+    }
 };
 
 pub const WordSize = enum(u4) {
@@ -773,6 +780,7 @@ pub const SerialConfig = struct {
                 .none => "",
                 .hardware => " RTS/CTS",
                 .software => " XON/XOFF",
+                .both => " RTS/CTS+XON/XOFF",
             },
         });
     }
@@ -806,10 +814,10 @@ pub fn configureSerialPort(port: std.Io.File, config: SerialConfig) !void {
 
             dcb.flags = @bitCast(DCBFlags{
                 .fParity = config.parity != .none,
-                .fOutxCtsFlow = config.handshake == .hardware,
-                .fOutX = config.handshake == .software,
-                .fInX = config.handshake == .software,
-                .fRtsControl = @as(u2, if (config.handshake == .hardware) 1 else 0),
+                .fOutxCtsFlow = config.handshake.hardware,
+                .fOutX = config.handshake.use_software,
+                .fInX = config.handshake.use_software,
+                .fRtsControl = @as(u2, if (config.handshake.hardware) 1 else 0),
             });
 
             dcb.wReserved = 0;
@@ -854,7 +862,7 @@ pub fn configureSerialPort(port: std.Io.File, config: SerialConfig) !void {
             settings.cflag = @bitCast(@intFromEnum(baudmask));
             settings.cflag.PARODD = config.parity == .odd or config.parity == .mark;
             settings.cflag.PARENB = config.parity != .none;
-            settings.cflag.CLOCAL = config.handshake == .none;
+            settings.cflag.CLOCAL = config.handshake.isNone();
             settings.cflag.CSTOPB = config.stop_bits == .two;
             settings.cflag.CREAD = true;
             settings.cflag.CSIZE = switch (config.word_size) {
@@ -866,8 +874,8 @@ pub fn configureSerialPort(port: std.Io.File, config: SerialConfig) !void {
 
             settings.iflag = .{};
             settings.iflag.INPCK = config.parity != .none;
-            settings.iflag.IXON = config.handshake == .software;
-            settings.iflag.IXOFF = config.handshake == .software;
+            settings.iflag.IXON = config.handshake.use_software;
+            settings.iflag.IXOFF = config.handshake.use_hardware;
             // these are common between linux and macos
             // settings.iflag.IGNBRK = false;
             // settings.iflag.BRKINT = false;
@@ -887,7 +895,7 @@ pub fn configureSerialPort(port: std.Io.File, config: SerialConfig) !void {
                     settings.cflag.CMSPAR = config.parity == .mark;
                 }
                 if (@hasField(std.c.tc_cflag_t, "CRTSCTS")) {
-                    settings.cflag.CRTSCTS = config.handshake == .hardware;
+                    settings.cflag.CRTSCTS = config.handshake.use_hardware;
                 }
                 // settings.cflag.ADDRB = false;
                 // settings.iflag.IUCLC = false;
@@ -896,8 +904,8 @@ pub fn configureSerialPort(port: std.Io.File, config: SerialConfig) !void {
                 // just setting baud on mac with cfsetspeed
             }
             if (builtin.os.tag == .macos) {
-                settings.cflag.CCTS_OFLOW = config.handshake == .hardware;
-                settings.cflag.CRTS_IFLOW = config.handshake == .hardware;
+                settings.cflag.CCTS_OFLOW = config.handshake.use_hardware;
+                settings.cflag.CRTS_IFLOW = config.handshake.use_hardware;
                 // settings.cflag.CIGNORE = false;
                 // settings.cflag.CDTR_IFLOW = false;
                 // settings.cflag.CDSR_OFLOW = false;
