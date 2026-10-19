@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const Io = std.Io;
 
 pub fn list(io: Io) !PortIterator {
-    return try switch (builtin.os.tag) {
+    return try switch (builtin.target.os.tag) {
         .windows => WindowsPortIterator.init(),
         .linux => LinuxPortIterator.init(io),
         .macos => DarwinPortIterator.init(io),
@@ -12,21 +12,21 @@ pub fn list(io: Io) !PortIterator {
 }
 
 pub fn list_info(io: Io) !InformationIterator {
-    return try switch (builtin.os.tag) {
+    return try switch (builtin.target.os.tag) {
         .windows => WindowsInformationIterator.init(),
         .linux => LinuxInformationIterator.init(io),
         else => @compileError("OS is not supported for information iteration"),
     };
 }
 
-pub const PortIterator = switch (builtin.os.tag) {
+pub const PortIterator = switch (builtin.target.os.tag) {
     .windows => WindowsPortIterator,
     .linux => LinuxPortIterator,
     .macos => DarwinPortIterator,
     else => @compileError("OS is not supported for port iteration"),
 };
 
-pub const InformationIterator = switch (builtin.os.tag) {
+pub const InformationIterator = switch (builtin.target.os.tag) {
     .windows => WindowsInformationIterator,
     .linux => LinuxInformationIterator,
     // .linux, .macos => @panic("'Port Information' not yet implemented for this OS"),
@@ -268,7 +268,7 @@ const WindowsInformationIterator = struct {
         const result = SetupDiGetDeviceRegistryPropertyA(
             device_info_set.*,
             device_info_data,
-            @intFromEnum(property),
+            @backingInt(property),
             &data_type,
             property_str,
             std.os.windows.NAME_MAX,
@@ -766,9 +766,9 @@ pub const SerialConfig = struct {
     pub fn format(self: Self, writer: *Io.Writer) !void {
         return writer.print("{d}@{d}{c}{d}{s}", .{
             self.baud_rate,
-            @intFromEnum(self.word_size),
-            @intFromEnum(self.parity),
-            @intFromEnum(self.stop_bits),
+            @backingInt(self.word_size),
+            @backingInt(self.parity),
+            @backingInt(self.stop_bits),
             switch (self.handshake) {
                 .none => "",
                 .hardware => " RTS/CTS",
@@ -792,7 +792,7 @@ const VSTOP = 9;
 /// are either called `\\.\COMxx\` or `COMx`, on unixes the serial
 /// port is called `/dev/ttyXXX`.
 pub fn configureSerialPort(port: std.Io.File, config: SerialConfig) !void {
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .windows => {
             var dcb = std.mem.zeroes(DCB);
             dcb.DCBlength = @sizeOf(DCB);
@@ -844,14 +844,14 @@ pub fn configureSerialPort(port: std.Io.File, config: SerialConfig) !void {
             const baudmask: std.c.speed_t = switch (tag) {
                 .macos => mapBaudToMacOSEnum(config.baud_rate) orelse b: {
                     macos_nonstandard_baud = true;
-                    break :b @enumFromInt(@as(u64, @bitCast(settings.cflag)));
+                    break :b @fromBackingInt(@intCast(@as(u64, @bitCast(settings.cflag))));
                 },
                 .linux => try mapBaudToLinuxEnum(config.baud_rate),
                 else => unreachable,
             };
 
             // initialize CFLAG with the baudrate bits
-            settings.cflag = @bitCast(@intFromEnum(baudmask));
+            settings.cflag = @bitCast(@backingInt(baudmask));
             settings.cflag.PARODD = config.parity == .odd or config.parity == .mark;
             settings.cflag.PARENB = config.parity != .none;
             settings.cflag.CLOCAL = config.handshake == .none;
@@ -882,7 +882,7 @@ pub fn configureSerialPort(port: std.Io.File, config: SerialConfig) !void {
             // settings.iflag.IUTF8 = false;
 
             // these are where they diverge
-            if (builtin.os.tag == .linux) {
+            if (builtin.target.os.tag == .linux) {
                 if (@hasField(std.c.tc_cflag_t, "CMSPAR")) {
                     settings.cflag.CMSPAR = config.parity == .mark;
                 }
@@ -895,7 +895,7 @@ pub fn configureSerialPort(port: std.Io.File, config: SerialConfig) !void {
                 // these are actually the same, but for simplicity
                 // just setting baud on mac with cfsetspeed
             }
-            if (builtin.os.tag == .macos) {
+            if (builtin.target.os.tag == .macos) {
                 settings.cflag.CCTS_OFLOW = config.handshake == .hardware;
                 settings.cflag.CRTS_IFLOW = config.handshake == .hardware;
                 // settings.cflag.CIGNORE = false;
@@ -919,7 +919,7 @@ pub fn configureSerialPort(port: std.Io.File, config: SerialConfig) !void {
 
             try std.posix.tcsetattr(port.handle, .NOW, settings);
 
-            if (builtin.os.tag == .macos and macos_nonstandard_baud) {
+            if (builtin.target.os.tag == .macos and macos_nonstandard_baud) {
                 const IOSSIOSPEED: c_uint = 0x80085402;
                 const speed: c_uint = @intCast(config.baud_rate);
                 if (std.c.ioctl(port.handle, @bitCast(IOSSIOSPEED), &speed) == -1) {
@@ -941,7 +941,7 @@ const Flush = enum {
 /// the receive buffer is flushed, if `output` is set all pending data in
 /// the send buffer is flushed.
 pub fn flushSerialPort(port: std.Io.File, flush: Flush) !void {
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .windows => {
             const mode: std.os.windows.DWORD = switch (flush) {
                 .input => PURGE_RXCLEAR,
@@ -984,7 +984,7 @@ pub const ControlPins = struct {
 };
 
 pub fn changeControlPins(port: std.Io.File, pins: ControlPins) !void {
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .windows => {
             const CLRDTR = 6;
             const CLRRTS = 4;
@@ -1035,7 +1035,7 @@ pub fn changeControlPins(port: std.Io.File, pins: ControlPins) !void {
 
         .macos => {},
 
-        else => @compileError("changeControlPins not implemented for " ++ @tagName(builtin.os.tag)),
+        else => @compileError("changeControlPins not implemented for " ++ @tagName(builtin.target.os.tag)),
     }
 }
 
@@ -1174,7 +1174,7 @@ test "basic configuration test" {
 
     var tty: []const u8 = undefined;
 
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .windows => tty = "\\\\.\\COM3",
         .linux => tty = "/dev/ttyUSB0",
         .macos => tty = "/dev/cu.usbmodem101",
@@ -1193,7 +1193,7 @@ test "basic configuration test" {
 test "basic flush test" {
     var tty: []const u8 = undefined;
     // if any, these will likely exist on a machine
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .windows => tty = "\\\\.\\COM3",
         .linux => tty = "/dev/ttyUSB0",
         .macos => tty = "/dev/cu.usbmodem101",
